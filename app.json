@@ -12,7 +12,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.vinnies.vinniesbrain",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "buildNumber": "2"
       }
     },
     "android": {

@@ -13,7 +13,7 @@
       "bundleIdentifier": "com.vinnies.vinniesbrain",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "buildNumber": "2"
+        "buildNumber": "5"
       }
     },
     "android": {

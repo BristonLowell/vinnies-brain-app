@@ -47,26 +47,31 @@ export default function Chat() {
   }, [year, params.category]);
 
   async function onSend(msg?: string) {
-    const message = (msg ?? text).trim();
-    if (!message || !sessionId) return;
+  const message = (msg ?? text).trim();
+  if (!message) return;
 
-    setItems((prev) => [...prev, { role: "user", text: message }]);
-    setText("");
-    setSending(true);
+  setItems((prev) => [...prev, { role: "user", text: message }]);
+  setText("");
+  setSending(true);
 
-    try {
-      const res = await sendChat(sessionId, message, year);
-      setItems((prev) => [...prev, { role: "assistant", text: res.answer }]);
-      setShowEscalate(res.show_escalation);
-    } catch (e: any) {
-      setItems((prev) => [
-        ...prev,
-        { role: "assistant", text: `Error talking to the server: ${e.message}` },
-      ]);
-    } finally {
-      setSending(false);
-    }
+  try {
+    // ✅ ALWAYS ensure we have a valid session right now
+    const sid = sessionId || (await getOrCreateSession());
+    if (!sessionId) setSessionId(sid);
+
+    const res = await sendChat(sid, message, year);
+    setItems((prev) => [...prev, { role: "assistant", text: res.answer }]);
+    setShowEscalate(res.show_escalation);
+  } catch (e: any) {
+    setItems((prev) => [
+      ...prev,
+      { role: "assistant", text: `Error talking to the server: ${e.message}` },
+    ]);
+  } finally {
+    setSending(false);
   }
+}
+
 
   return (
     <KeyboardAvoidingView

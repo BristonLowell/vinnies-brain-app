@@ -1,7 +1,15 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  View, Text, TextInput, Pressable, StyleSheet, FlatList, KeyboardAvoidingView, Platform
+  View,
+  Text,
+  TextInput,
+  Pressable,
+  StyleSheet,
+  FlatList,
+  KeyboardAvoidingView,
+  Platform,
+  AppState,
 } from "react-native";
 import { getOrCreateSession, sendChat } from "../src/api";
 
@@ -15,28 +23,60 @@ const QUICK_CHIPS = [
   "Only happens in heavy rain",
 ];
 
+const INITIAL_ASSISTANT_MESSAGE: ChatItem = {
+  role: "assistant",
+  text:
+    "Tell me what’s happening. If you can, include: where it is (window/roof/door/floor), when it happens (rain/washing/travel), and whether there’s active dripping.",
+};
+
 export default function Chat() {
   const router = useRouter();
   const params = useLocalSearchParams<{ year?: string; category?: string }>();
   const year = params.year ? Number(params.year) : undefined;
 
   const [sessionId, setSessionId] = useState<string>("");
-  const [items, setItems] = useState<ChatItem[]>([
-    {
-      role: "assistant",
-      text:
-        "Tell me what’s happening. If you can, include: where it is (window/roof/door/floor), when it happens (rain/washing/travel), and whether there’s active dripping.",
-    },
-  ]);
+  const [items, setItems] = useState<ChatItem[]>([INITIAL_ASSISTANT_MESSAGE]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [showEscalate, setShowEscalate] = useState(false);
 
+  // Used to ignore the first "active" event on mount
+  const didInit = useRef(false);
+
+  // ✅ Reset UI + fetch a brand new session whenever app becomes active again
+  async function resetConversation() {
+    setItems([INITIAL_ASSISTANT_MESSAGE]);
+    setText("");
+    setShowEscalate(false);
+
+    // If your getOrCreateSession currently reuses a saved session,
+    // you should update it to support { forceNew: true }.
+    // If it already always creates new, this still works.
+    const sid = await getOrCreateSession({ forceNew: true } as any);
+    setSessionId(sid);
+  }
+
+  // Initial session on first mount
   useEffect(() => {
     (async () => {
       const sid = await getOrCreateSession();
       setSessionId(sid);
     })();
+  }, []);
+
+  // ✅ Option B: reset whenever app comes back to foreground
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        if (!didInit.current) {
+          didInit.current = true; // ignore initial activation
+          return;
+        }
+        resetConversation();
+      }
+    });
+
+    return () => sub.remove();
   }, []);
 
   const header = useMemo(() => {
@@ -47,31 +87,30 @@ export default function Chat() {
   }, [year, params.category]);
 
   async function onSend(msg?: string) {
-  const message = (msg ?? text).trim();
-  if (!message) return;
+    const message = (msg ?? text).trim();
+    if (!message) return;
 
-  setItems((prev) => [...prev, { role: "user", text: message }]);
-  setText("");
-  setSending(true);
+    setItems((prev) => [...prev, { role: "user", text: message }]);
+    setText("");
+    setSending(true);
 
-  try {
-    // ✅ ALWAYS ensure we have a valid session right now
-    const sid = sessionId || (await getOrCreateSession());
-    if (!sessionId) setSessionId(sid);
+    try {
+      // ✅ ALWAYS ensure we have a valid session right now
+      const sid = sessionId || (await getOrCreateSession());
+      if (!sessionId) setSessionId(sid);
 
-    const res = await sendChat(sid, message, year);
-    setItems((prev) => [...prev, { role: "assistant", text: res.answer }]);
-    setShowEscalate(res.show_escalation);
-  } catch (e: any) {
-    setItems((prev) => [
-      ...prev,
-      { role: "assistant", text: `Error talking to the server: ${e.message}` },
-    ]);
-  } finally {
-    setSending(false);
+      const res = await sendChat(sid, message, year);
+      setItems((prev) => [...prev, { role: "assistant", text: res.answer }]);
+      setShowEscalate(res.show_escalation);
+    } catch (e: any) {
+      setItems((prev) => [
+        ...prev,
+        { role: "assistant", text: `Error talking to the server: ${e.message}` },
+      ]);
+    } finally {
+      setSending(false);
+    }
   }
-}
-
 
   return (
     <KeyboardAvoidingView
@@ -86,8 +125,18 @@ export default function Chat() {
           keyExtractor={(_, i) => String(i)}
           contentContainerStyle={{ paddingVertical: 12, gap: 10 }}
           renderItem={({ item }) => (
-            <View style={[styles.bubble, item.role === "user" ? styles.userBubble : styles.aiBubble]}>
-              <Text style={[styles.bubbleText, item.role === "user" ? styles.userText : styles.aiText]}>
+            <View
+              style={[
+                styles.bubble,
+                item.role === "user" ? styles.userBubble : styles.aiBubble,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.bubbleText,
+                  item.role === "user" ? styles.userText : styles.aiText,
+                ]}
+              >
                 {item.text}
               </Text>
             </View>
@@ -105,7 +154,12 @@ export default function Chat() {
         {showEscalate && (
           <Pressable
             style={styles.escalate}
-            onPress={() => router.push({ pathname: "/escalate", params: { year: year ? String(year) : "" } })}
+            onPress={() =>
+              router.push({
+                pathname: "/escalate",
+                params: { year: year ? String(year) : "" },
+              })
+            }
           >
             <Text style={styles.escalateText}>Request help (email)</Text>
           </Pressable>
@@ -119,13 +173,18 @@ export default function Chat() {
             style={styles.input}
             editable={!sending}
           />
-          <Pressable style={[styles.sendBtn, sending && { opacity: 0.5 }]} disabled={sending} onPress={() => onSend()}>
+          <Pressable
+            style={[styles.sendBtn, sending && { opacity: 0.5 }]}
+            disabled={sending}
+            onPress={() => onSend()}
+          >
             <Text style={styles.sendText}>Send</Text>
           </Pressable>
         </View>
 
         <Text style={styles.footer}>
-          Safety: if active leaking, soft floors/walls, mold smell, or electrical exposure—request help.
+          Safety: if active leaking, soft floors/walls, mold smell, or electrical
+          exposure—request help.
         </Text>
       </View>
     </KeyboardAvoidingView>
@@ -141,14 +200,52 @@ const styles = StyleSheet.create({
   bubbleText: { fontSize: 15, lineHeight: 20 },
   userText: { color: "white" },
   aiText: { color: "black" },
-  chipsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginVertical: 8 },
-  chip: { borderWidth: 1, borderColor: "#ccc", borderRadius: 999, paddingVertical: 8, paddingHorizontal: 10 },
+  chipsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginVertical: 8,
+  },
+  chip: {
+    borderWidth: 1,
+    borderColor: "#ccc",
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
   chipText: { fontSize: 12 },
-  escalate: { backgroundColor: "#111", padding: 12, borderRadius: 10, alignItems: "center", marginBottom: 8 },
+  escalate: {
+    backgroundColor: "#111",
+    padding: 12,
+    borderRadius: 10,
+    alignItems: "center",
+    marginBottom: 8,
+  },
   escalateText: { color: "white", fontWeight: "700" },
-  inputRow: { flexDirection: "row", gap: 10, alignItems: "center", marginBottom: 8 },
-  input: { flex: 1, borderWidth: 1, borderColor: "#ccc", borderRadius: 10, padding: 12 },
-  sendBtn: { backgroundColor: "black", paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10 },
+  inputRow: {
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  input: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "#ccc",
+    borderRadius: 10,
+    padding: 12,
+  },
+  sendBtn: {
+    backgroundColor: "black",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+  },
   sendText: { color: "white", fontWeight: "700" },
-  footer: { fontSize: 11, opacity: 0.6, marginBottom: 10, textAlign: "center" },
+  footer: {
+    fontSize: 11,
+    opacity: 0.6,
+    marginBottom: 10,
+    textAlign: "center",
+  },
 });

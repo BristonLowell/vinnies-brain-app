@@ -18,19 +18,49 @@ async function http<T>(path: string, body?: any): Promise<T> {
   const text = await res.text(); // read raw body for debugging
 
   if (!res.ok) {
-    // This will show the real FastAPI error message (422 details, etc.)
     throw new Error(`HTTP ${res.status}: ${text || res.statusText}`);
   }
 
   return text ? (JSON.parse(text) as T) : ({} as T);
 }
-export async function getOrCreateSession(): Promise<string> {
+
+/**
+ * Gets an existing session if valid, otherwise creates a new one.
+ *
+ * Option B support:
+ * - forceNew: always create a new session and overwrite stored session id
+ * - resetOld: when forceNew is true, also ask backend to reset old session (if supported)
+ */
+export async function getOrCreateSession(opts?: {
+  forceNew?: boolean;
+  resetOld?: boolean; // requires backend support (optional)
+}): Promise<string> {
   const existing = await AsyncStorage.getItem(SESSION_KEY);
 
-  // If we already have a session id saved, verify it still exists on the server
+  // ----------------------------
+  // OPTION B: Force a fresh session
+  // ----------------------------
+  if (opts?.forceNew) {
+    const data = await http<CreateSessionResponse>("/v1/sessions", {
+      channel: "mobile",
+      mode: "customer",
+
+      // Only send these if you implemented the backend reset behavior.
+      // If your backend doesn't accept these fields yet, leave resetOld=false.
+      ...(opts.resetOld && existing
+        ? { reset_old_session_id: existing, delete_old_messages: true }
+        : {}),
+    });
+
+    await AsyncStorage.setItem(SESSION_KEY, data.session_id);
+    return data.session_id;
+  }
+
+  // ----------------------------
+  // Normal behavior: reuse saved session if still valid
+  // ----------------------------
   if (existing) {
     try {
-      // GET because body is undefined (your http() helper uses GET when no body)
       await http<{ ok: boolean }>(`/v1/sessions/${existing}`);
       return existing;
     } catch (e: any) {
@@ -55,8 +85,6 @@ export async function getOrCreateSession(): Promise<string> {
   await AsyncStorage.setItem(SESSION_KEY, data.session_id);
   return data.session_id;
 }
-
-
 
 export async function setContext(sessionId: string, airstreamYear?: number, category?: string) {
   await http<{ ok: boolean }>(`/v1/sessions/${sessionId}/context`, {

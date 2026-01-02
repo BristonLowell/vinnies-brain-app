@@ -27,24 +27,26 @@ async function http<T>(path: string, body?: any): Promise<T> {
 export async function getOrCreateSession(): Promise<string> {
   const existing = await AsyncStorage.getItem(SESSION_KEY);
 
-  // 1) If we have a stored session id, verify it still exists
+  // If we already have a session id saved, verify it still exists on the server
   if (existing) {
     try {
-      await http<{ ok: boolean }>(`/v1/sessions/${existing}`, undefined, "GET");
+      // GET because body is undefined (your http() helper uses GET when no body)
+      await http<{ ok: boolean }>(`/v1/sessions/${existing}`);
       return existing;
     } catch (e: any) {
-      // If backend says session not found, clear it and create a new one
       const msg = String(e?.message ?? "");
-      if (msg.includes("404") || msg.toLowerCase().includes("session not found")) {
+
+      // If backend says session not found (404), clear it so we can create a fresh one
+      if (msg.includes("HTTP 404") || msg.toLowerCase().includes("session not found")) {
         await AsyncStorage.removeItem(SESSION_KEY);
       } else {
-        // For other errors (network, etc), keep existing so app can retry
+        // For other errors (network, temporary backend error), keep existing so app can retry
         return existing;
       }
     }
   }
 
-  // 2) Create a new session
+  // Create a new session
   const data = await http<CreateSessionResponse>("/v1/sessions", {
     channel: "mobile",
     mode: "customer",
@@ -53,6 +55,7 @@ export async function getOrCreateSession(): Promise<string> {
   await AsyncStorage.setItem(SESSION_KEY, data.session_id);
   return data.session_id;
 }
+
 
 
 export async function setContext(sessionId: string, airstreamYear?: number, category?: string) {

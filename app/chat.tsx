@@ -16,8 +16,14 @@ import {
 } from "react-native";
 import { getOrCreateSession, sendChat } from "../src/api";
 
-type ChatItem = { role: "user" | "assistant"; text: string };
-type Phase = "initial" | "binary";
+type ChatItem = {
+  role: "user" | "assistant";
+  text: string;
+  meta?: {
+    usedArticles?: { id: string; title: string }[];
+    showEscalation?: boolean;
+  };
+};
 
 const QUICK_CHIPS = [
   "Active leak right now",
@@ -33,6 +39,19 @@ const INITIAL_ASSISTANT: ChatItem = {
     "Tell me what’s happening. If you can, include: where it is (window/roof/door/floor), when it happens (rain/washing/travel), and whether there’s active dripping.",
 };
 
+function looksLikeYesNoQuestion(text: string) {
+  const t = (text || "").toLowerCase();
+  // lightweight heuristic; good enough for now
+  return (
+    t.includes("yes/no") ||
+    t.includes("quick question") ||
+    t.includes("does this") ||
+    t.includes("is it") ||
+    t.includes("are you") ||
+    t.trim().endsWith("?")
+  );
+}
+
 export default function Chat() {
   const router = useRouter();
   const params = useLocalSearchParams<{ year?: string; category?: string }>();
@@ -43,7 +62,6 @@ export default function Chat() {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [showEscalate, setShowEscalate] = useState(false);
-  const [phase, setPhase] = useState<Phase>("initial");
 
   const listRef = useRef<FlatList<ChatItem>>(null);
   const lastResetAt = useRef(0);
@@ -65,7 +83,6 @@ export default function Chat() {
     setText("");
     setShowEscalate(false);
     setSending(false);
-    setPhase("initial");
 
     const sid = await getOrCreateSession({ forceNew: true });
     setSessionId(sid);
@@ -93,14 +110,24 @@ export default function Chat() {
     return () => clearTimeout(t);
   }, [items.length]);
 
+  const lastAssistant = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].role === "assistant") return items[i];
+    }
+    return null;
+  }, [items]);
+
+  const showBinaryControls = useMemo(() => {
+    if (sending) return false;
+    if (!lastAssistant) return false;
+    return looksLikeYesNoQuestion(lastAssistant.text);
+  }, [lastAssistant, sending]);
+
   async function onSend(msg?: string) {
     if (sending) return;
 
     const message = (msg ?? text).trim();
     if (!message) return;
-
-    // Prevent typing during binary phase
-    if (phase === "binary" && !msg) return;
 
     setItems((prev) => [...prev, { role: "user", text: message }]);
     setText("");
@@ -111,13 +138,25 @@ export default function Chat() {
       if (!sessionId) setSessionId(sid);
 
       const res = await sendChat(sid, message, year);
-      setItems((prev) => [...prev, { role: "assistant", text: res.answer }]);
-      setShowEscalate(res.show_escalation);
 
-      if (phase === "initial") {
-        setPhase("binary");
-        Keyboard.dismiss();
-      }
+      const usedArticles = Array.isArray(res.used_articles)
+        ? res.used_articles.map((a: any) => ({ id: a.id, title: a.title }))
+        : [];
+
+      setItems((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          text: res.answer,
+          meta: {
+            usedArticles,
+            showEscalation: !!res.show_escalation,
+          },
+        },
+      ]);
+
+      setShowEscalate(!!res.show_escalation);
+      Keyboard.dismiss();
     } catch (e: any) {
       setItems((prev) => [
         ...prev,
@@ -160,12 +199,24 @@ export default function Chat() {
           keyboardShouldPersistTaps="handled"
           renderItem={({ item }) => {
             const isUser = item.role === "user";
+            const used = item.meta?.usedArticles || [];
+
             return (
               <View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
                 <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
                   <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>
                     {item.text}
                   </Text>
+
+                  {/* Sources (assistant only) */}
+                  {!isUser && used.length > 0 && (
+                    <View style={styles.sourcesWrap}>
+                      <Text style={styles.sourcesLabel}>Sources used:</Text>
+                      <Text style={styles.sourcesText}>
+                        {used.map((u) => u.title).join(" • ")}
+                      </Text>
+                    </View>
+                  )}
                 </View>
               </View>
             );
@@ -182,12 +233,12 @@ export default function Chat() {
           }
         />
 
-        {/* Quick chips (INITIAL ONLY) */}
-        {phase === "initial" && (
+        {/* Quick chips (helpful always, but keep them only when conversation is short) */}
+        {items.length <= 2 && (
           <View style={styles.chipsWrap}>
             <View style={styles.chipsRow}>
               {QUICK_CHIPS.map((c) => (
-                <Pressable key={c} onPress={() => onSend(c)} style={styles.chip}>
+                <Pressable key={c} onPress={() => onSend(c)} style={styles.chip} disabled={sending}>
                   <Text style={styles.chipText}>{c}</Text>
                 </Pressable>
               ))}
@@ -195,8 +246,8 @@ export default function Chat() {
           </View>
         )}
 
-        {/* YES / NO CONTROLS */}
-        {phase === "binary" && (
+        {/* YES / NO CONTROLS (only when it looks appropriate) */}
+        {showBinaryControls && (
           <View style={styles.binaryRow}>
             <Pressable
               style={[styles.binaryBtn, styles.yesBtn]}
@@ -236,30 +287,28 @@ export default function Chat() {
           </Pressable>
         )}
 
-        {/* Text Input (INITIAL ONLY) */}
-        {phase === "initial" && (
-          <View style={styles.inputWrap}>
-            <View style={styles.inputCard}>
-              <TextInput
-                value={text}
-                onChangeText={setText}
-                placeholder="Describe the issue…"
-                placeholderTextColor="#9CA3AF"
-                style={styles.input}
-                multiline
-                editable={!sending}
-              />
+        {/* Text Input (ALWAYS ON) */}
+        <View style={styles.inputWrap}>
+          <View style={styles.inputCard}>
+            <TextInput
+              value={text}
+              onChangeText={setText}
+              placeholder="Type your message…"
+              placeholderTextColor="#9CA3AF"
+              style={styles.input}
+              multiline
+              editable={!sending}
+            />
 
-              <Pressable
-                onPress={() => onSend()}
-                disabled={!canSend}
-                style={[styles.sendBtn, !canSend && styles.sendBtnDisabled]}
-              >
-                <Text style={styles.sendText}>Send</Text>
-              </Pressable>
-            </View>
+            <Pressable
+              onPress={() => onSend()}
+              disabled={!canSend}
+              style={[styles.sendBtn, !canSend && styles.sendBtnDisabled]}
+            >
+              <Text style={styles.sendText}>Send</Text>
+            </Pressable>
           </View>
-        )}
+        </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -299,6 +348,10 @@ const styles = StyleSheet.create({
 
   typingRow: { marginTop: 6 },
   typingText: { marginLeft: 8, fontWeight: "600" },
+
+  sourcesWrap: { marginTop: 10, paddingTop: 8, borderTopWidth: 1, borderTopColor: "rgba(0,0,0,0.08)" },
+  sourcesLabel: { fontSize: 12, fontWeight: "800", color: "rgba(11,18,32,0.75)" },
+  sourcesText: { marginTop: 2, fontSize: 12, color: "rgba(11,18,32,0.75)" },
 
   chipsWrap: { paddingHorizontal: 14, paddingBottom: 6 },
   chipsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },

@@ -6,13 +6,16 @@ export type CreateSessionResponse = {
 
 export type ChatResponse = {
   answer: string;
-  clarifying_questions: string[];
-  safety_flags: string[];
   confidence: number;
   used_articles: { id: string; title: string }[];
   show_escalation: boolean;
   message_id: string;
+
+  // optional / legacy
+  clarifying_questions?: string[];
+  safety_flags?: string[];
 };
+
 
 export type EscalationResponse = {
   ticket_id: string;

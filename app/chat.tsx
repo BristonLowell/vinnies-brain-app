@@ -12,10 +12,12 @@ import {
   AppState,
   ActivityIndicator,
   SafeAreaView,
+  Keyboard,
 } from "react-native";
 import { getOrCreateSession, sendChat } from "../src/api";
 
 type ChatItem = { role: "user" | "assistant"; text: string };
+type Phase = "initial" | "binary";
 
 const QUICK_CHIPS = [
   "Active leak right now",
@@ -36,18 +38,15 @@ export default function Chat() {
   const params = useLocalSearchParams<{ year?: string; category?: string }>();
   const year = params.year ? Number(params.year) : undefined;
 
-  const [sessionId, setSessionId] = useState<string>("");
+  const [sessionId, setSessionId] = useState("");
   const [items, setItems] = useState<ChatItem[]>([INITIAL_ASSISTANT]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [showEscalate, setShowEscalate] = useState(false);
+  const [phase, setPhase] = useState<Phase>("initial");
 
   const listRef = useRef<FlatList<ChatItem>>(null);
-
-  // Prevent double-resets from iOS event quirks
-  const lastResetAt = useRef<number>(0);
-
-  // Ignore the first "active" event that happens right after mount
+  const lastResetAt = useRef(0);
   const didIgnoreFirstActive = useRef(false);
 
   const header = useMemo(() => {
@@ -59,66 +58,73 @@ export default function Chat() {
 
   const resetConversation = useCallback(async () => {
     const now = Date.now();
-    if (now - lastResetAt.current < 800) return; // debounce
+    if (now - lastResetAt.current < 800) return;
     lastResetAt.current = now;
 
-    // Reset UI
     setItems([INITIAL_ASSISTANT]);
     setText("");
     setShowEscalate(false);
     setSending(false);
+    setPhase("initial");
 
-    // ✅ Always force a new session for cold start + resume
     const sid = await getOrCreateSession({ forceNew: true });
     setSessionId(sid);
   }, []);
 
-  // ✅ Cold start: reset once on mount
   useEffect(() => {
     resetConversation();
   }, [resetConversation]);
 
-  // ✅ Resume: reset when app comes back to foreground (but ignore first "active")
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
       if (state === "active") {
         if (!didIgnoreFirstActive.current) {
-          didIgnoreFirstActive.current = true; // ignore initial activation
+          didIgnoreFirstActive.current = true;
           return;
         }
         resetConversation();
       }
     });
-
     return () => sub.remove();
   }, [resetConversation]);
 
-  // Auto-scroll to bottom when messages update
   useEffect(() => {
     const t = setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 0);
     return () => clearTimeout(t);
   }, [items.length]);
 
   async function onSend(msg?: string) {
+    if (sending) return;
+
     const message = (msg ?? text).trim();
-    if (!message || sending) return;
+    if (!message) return;
+
+    // Prevent typing during binary phase
+    if (phase === "binary" && !msg) return;
 
     setItems((prev) => [...prev, { role: "user", text: message }]);
     setText("");
     setSending(true);
 
     try {
-      // If something tried to send before session finished resetting, ensure one exists
       const sid = sessionId || (await getOrCreateSession({ forceNew: true }));
       if (!sessionId) setSessionId(sid);
 
       const res = await sendChat(sid, message, year);
       setItems((prev) => [...prev, { role: "assistant", text: res.answer }]);
       setShowEscalate(res.show_escalation);
+
+      if (phase === "initial") {
+        setPhase("binary");
+        Keyboard.dismiss();
+      }
     } catch (e: any) {
       setItems((prev) => [
         ...prev,
-        { role: "assistant", text: `Sorry — I couldn’t reach the server.\n\n${e?.message ?? ""}` },
+        {
+          role: "assistant",
+          text: "Sorry — I couldn’t reach the server. Please try again.",
+        },
       ]);
     } finally {
       setSending(false);
@@ -132,19 +138,15 @@ export default function Chat() {
       <KeyboardAvoidingView
         style={styles.safe}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 6 : 0}
       >
-        {/* Top bar */}
+        {/* Top Bar */}
         <View style={styles.topBar}>
           <View style={{ flex: 1 }}>
             <Text style={styles.title}>Vinnie’s Brain</Text>
             {!!header && <Text style={styles.subtitle}>{header}</Text>}
           </View>
 
-          <Pressable
-            onPress={resetConversation}
-            style={({ pressed }) => [styles.resetBtn, pressed && { opacity: 0.7 }]}
-          >
+          <Pressable onPress={resetConversation} style={styles.resetBtn}>
             <Text style={styles.resetText}>New</Text>
           </Pressable>
         </View>
@@ -171,7 +173,7 @@ export default function Chat() {
           ListFooterComponent={
             sending ? (
               <View style={styles.typingRow}>
-                <View style={[styles.bubble, styles.aiBubble, styles.typingBubble]}>
+                <View style={[styles.bubble, styles.aiBubble]}>
                   <ActivityIndicator />
                   <Text style={styles.typingText}>Thinking…</Text>
                 </View>
@@ -180,70 +182,84 @@ export default function Chat() {
           }
         />
 
-        {/* Quick chips */}
-        <View style={styles.chipsWrap}>
-          <View style={styles.chipsHeader}>
-            <Text style={styles.chipsTitle}>Quick options</Text>
-            <Text style={styles.chipsHint}>Tap one to send</Text>
+        {/* Quick chips (INITIAL ONLY) */}
+        {phase === "initial" && (
+          <View style={styles.chipsWrap}>
+            <View style={styles.chipsRow}>
+              {QUICK_CHIPS.map((c) => (
+                <Pressable key={c} onPress={() => onSend(c)} style={styles.chip}>
+                  <Text style={styles.chipText}>{c}</Text>
+                </Pressable>
+              ))}
+            </View>
           </View>
-          <View style={styles.chipsRow}>
-            {QUICK_CHIPS.map((c) => (
-              <Pressable
-                key={c}
-                onPress={() => onSend(c)}
-                style={({ pressed }) => [styles.chip, pressed && { opacity: 0.75 }]}
-              >
-                <Text style={styles.chipText}>{c}</Text>
-              </Pressable>
-            ))}
+        )}
+
+        {/* YES / NO CONTROLS */}
+        {phase === "binary" && (
+          <View style={styles.binaryRow}>
+            <Pressable
+              style={[styles.binaryBtn, styles.yesBtn]}
+              disabled={sending}
+              onPress={() => onSend("yes")}
+            >
+              <Text style={styles.binaryText}>Yes</Text>
+            </Pressable>
+
+            <Pressable
+              style={[styles.binaryBtn, styles.noBtn]}
+              disabled={sending}
+              onPress={() => onSend("no")}
+            >
+              <Text style={styles.binaryText}>No</Text>
+            </Pressable>
+
+            <Pressable
+              style={[styles.binaryBtn, styles.skipBtn]}
+              disabled={sending}
+              onPress={() => onSend("skip")}
+            >
+              <Text style={styles.binaryText}>Not sure</Text>
+            </Pressable>
           </View>
-        </View>
+        )}
 
         {/* Escalate */}
         {showEscalate && (
           <Pressable
-            style={({ pressed }) => [styles.escalate, pressed && { opacity: 0.85 }]}
+            style={styles.escalate}
             onPress={() =>
               router.push({ pathname: "/escalate", params: { year: year ? String(year) : "" } })
             }
           >
-            <View style={styles.escalateBadge}>
-              <Text style={styles.escalateBadgeText}>Safety</Text>
-            </View>
             <Text style={styles.escalateText}>Request help (email)</Text>
           </Pressable>
         )}
 
-        {/* Input */}
-        <View style={styles.inputWrap}>
-          <View style={styles.inputCard}>
-            <TextInput
-              value={text}
-              onChangeText={setText}
-              placeholder="Describe the issue…"
-              placeholderTextColor="#9CA3AF"
-              style={styles.input}
-              multiline
-              editable={!sending}
-            />
+        {/* Text Input (INITIAL ONLY) */}
+        {phase === "initial" && (
+          <View style={styles.inputWrap}>
+            <View style={styles.inputCard}>
+              <TextInput
+                value={text}
+                onChangeText={setText}
+                placeholder="Describe the issue…"
+                placeholderTextColor="#9CA3AF"
+                style={styles.input}
+                multiline
+                editable={!sending}
+              />
 
-            <Pressable
-              onPress={() => onSend()}
-              disabled={!canSend}
-              style={({ pressed }) => [
-                styles.sendBtn,
-                !canSend && styles.sendBtnDisabled,
-                pressed && canSend && { opacity: 0.85 },
-              ]}
-            >
-              <Text style={styles.sendText}>{sending ? "…" : "Send"}</Text>
-            </Pressable>
+              <Pressable
+                onPress={() => onSend()}
+                disabled={!canSend}
+                style={[styles.sendBtn, !canSend && styles.sendBtnDisabled]}
+              >
+                <Text style={styles.sendText}>Send</Text>
+              </Pressable>
+            </View>
           </View>
-
-          <Text style={styles.footer}>
-            Safety: if active leaking, soft floors/walls, mold smell, or electrical exposure—request help.
-          </Text>
-        </View>
+        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -253,128 +269,96 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#0B1220" },
 
   topBar: {
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 12,
+    padding: 16,
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "rgba(255,255,255,0.08)",
+    borderBottomColor: "rgba(255,255,255,0.1)",
   },
-  title: { color: "white", fontSize: 18, fontWeight: "800", letterSpacing: 0.2 },
-  subtitle: { color: "rgba(255,255,255,0.7)", fontSize: 12, marginTop: 2 },
+  title: { color: "white", fontSize: 18, fontWeight: "800" },
+  subtitle: { color: "rgba(255,255,255,0.6)", fontSize: 12 },
   resetBtn: {
-    backgroundColor: "rgba(255,255,255,0.10)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.14)",
-    paddingVertical: 8,
+    backgroundColor: "rgba(255,255,255,0.12)",
+    paddingVertical: 6,
     paddingHorizontal: 12,
     borderRadius: 999,
   },
-  resetText: { color: "white", fontWeight: "700", fontSize: 12 },
+  resetText: { color: "white", fontWeight: "700" },
 
-  listContent: { paddingHorizontal: 14, paddingVertical: 14, gap: 10, flexGrow: 1 },
+  listContent: { padding: 14, gap: 10, flexGrow: 1 },
   row: { flexDirection: "row" },
   rowLeft: { justifyContent: "flex-start" },
   rowRight: { justifyContent: "flex-end" },
 
-  bubble: { maxWidth: "86%", paddingVertical: 10, paddingHorizontal: 12, borderRadius: 14 },
-  aiBubble: {
-    backgroundColor: "rgba(255,255,255,0.92)",
-    borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.06)",
-  },
-  userBubble: {
-    backgroundColor: "#111827",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-  },
-  bubbleText: { fontSize: 15, lineHeight: 20 },
+  bubble: { maxWidth: "85%", padding: 12, borderRadius: 14 },
+  aiBubble: { backgroundColor: "white" },
+  userBubble: { backgroundColor: "#111827" },
+  bubbleText: { fontSize: 15 },
   aiText: { color: "#0B1220" },
   userText: { color: "white" },
 
-  typingRow: { flexDirection: "row", justifyContent: "flex-start", marginTop: 4 },
-  typingBubble: { flexDirection: "row", alignItems: "center", gap: 10 },
-  typingText: { color: "#0B1220", fontWeight: "600" },
+  typingRow: { marginTop: 6 },
+  typingText: { marginLeft: 8, fontWeight: "600" },
 
-  chipsWrap: { paddingHorizontal: 14, paddingTop: 8, paddingBottom: 6 },
-  chipsHeader: { flexDirection: "row", justifyContent: "space-between", marginBottom: 8 },
-  chipsTitle: { color: "rgba(255,255,255,0.9)", fontWeight: "700", fontSize: 12 },
-  chipsHint: { color: "rgba(255,255,255,0.55)", fontSize: 12 },
+  chipsWrap: { paddingHorizontal: 14, paddingBottom: 6 },
   chipsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   chip: {
     backgroundColor: "rgba(255,255,255,0.08)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-    paddingVertical: 8,
-    paddingHorizontal: 10,
     borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
   },
-  chipText: { color: "rgba(255,255,255,0.92)", fontSize: 12, fontWeight: "600" },
+  chipText: { color: "white", fontSize: 12, fontWeight: "600" },
+
+  binaryRow: {
+    flexDirection: "row",
+    gap: 10,
+    padding: 14,
+  },
+  binaryBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 14,
+    alignItems: "center",
+  },
+  yesBtn: { backgroundColor: "#166534" },
+  noBtn: { backgroundColor: "#7f1d1d" },
+  skipBtn: { backgroundColor: "#374151" },
+  binaryText: { color: "white", fontSize: 16, fontWeight: "800" },
 
   escalate: {
-    marginHorizontal: 14,
-    marginTop: 6,
-    marginBottom: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
+    margin: 14,
+    padding: 14,
     borderRadius: 14,
-    backgroundColor: "rgba(239,68,68,0.14)",
-    borderWidth: 1,
-    borderColor: "rgba(239,68,68,0.35)",
-    flexDirection: "row",
+    backgroundColor: "rgba(239,68,68,0.2)",
     alignItems: "center",
-    gap: 10,
   },
-  escalateBadge: {
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 999,
-    backgroundColor: "rgba(239,68,68,0.25)",
-    borderWidth: 1,
-    borderColor: "rgba(239,68,68,0.35)",
-  },
-  escalateBadgeText: { color: "rgba(255,255,255,0.92)", fontSize: 12, fontWeight: "800" },
-  escalateText: { color: "rgba(255,255,255,0.96)", fontWeight: "800", fontSize: 14 },
+  escalateText: { color: "white", fontWeight: "800" },
 
   inputWrap: {
-    paddingHorizontal: 14,
-    paddingBottom: 10,
-    paddingTop: 8,
+    padding: 14,
     borderTopWidth: 1,
-    borderTopColor: "rgba(255,255,255,0.08)",
-    backgroundColor: "rgba(0,0,0,0.08)",
+    borderTopColor: "rgba(255,255,255,0.1)",
   },
   inputCard: {
     flexDirection: "row",
-    alignItems: "flex-end",
     gap: 10,
     padding: 10,
     borderRadius: 16,
     backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
   },
   input: {
     flex: 1,
+    color: "white",
     minHeight: 44,
     maxHeight: 120,
-    color: "white",
-    fontSize: 15,
-    lineHeight: 20,
-    paddingVertical: 6,
-    paddingHorizontal: 8,
   },
-  sendBtn: { paddingVertical: 12, paddingHorizontal: 14, borderRadius: 14, backgroundColor: "white" },
-  sendBtnDisabled: { backgroundColor: "rgba(255,255,255,0.35)" },
-  sendText: { color: "#0B1220", fontWeight: "900", fontSize: 14 },
-
-  footer: {
-    marginTop: 8,
-    textAlign: "center",
-    color: "rgba(255,255,255,0.55)",
-    fontSize: 11,
-    lineHeight: 14,
+  sendBtn: {
+    backgroundColor: "white",
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 14,
   },
+  sendBtnDisabled: { backgroundColor: "rgba(255,255,255,0.4)" },
+  sendText: { color: "#0B1220", fontWeight: "900" },
 });

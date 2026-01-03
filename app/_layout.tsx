@@ -2,7 +2,16 @@ import { Stack } from "expo-router";
 
 export default function Layout() {
   return (
-    <Stack screenOptions={{ headerTitle: "Vinnie’s Brain" }}>
+    <Stack
+      screenOptions={{
+        headerTitle: "Vinnie’s Brain",
+        headerStyle: { backgroundColor: "#0B0F14" },
+        headerTintColor: "white",
+        headerTitleStyle: { fontWeight: "900" },
+        headerShadowVisible: false,
+        contentStyle: { backgroundColor: "#0B0F14" },
+      }}
+    >
       <Stack.Screen name="index" options={{ title: "Vinnie’s Brain" }} />
       <Stack.Screen name="year" options={{ title: "Airstream Year" }} />
       <Stack.Screen name="category" options={{ title: "Issue Type" }} />

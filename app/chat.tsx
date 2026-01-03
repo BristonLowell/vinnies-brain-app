@@ -11,9 +11,11 @@ import {
   Platform,
   AppState,
   ActivityIndicator,
-  SafeAreaView,
   Keyboard,
+  TouchableWithoutFeedback,
+  StatusBar,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { getOrCreateSession, sendChat } from "../src/api";
 
 type ChatItem = {
@@ -41,7 +43,6 @@ const INITIAL_ASSISTANT: ChatItem = {
 
 function looksLikeYesNoQuestion(text: string) {
   const t = (text || "").toLowerCase();
-  // lightweight heuristic; good enough for now
   return (
     t.includes("yes/no") ||
     t.includes("quick question") ||
@@ -50,6 +51,13 @@ function looksLikeYesNoQuestion(text: string) {
     t.includes("are you") ||
     t.trim().endsWith("?")
   );
+}
+
+function initials(label: string) {
+  const s = (label || "").trim();
+  if (!s) return "?";
+  const parts = s.split(/\s+/).slice(0, 2);
+  return parts.map((p) => p[0]?.toUpperCase()).join("");
 }
 
 export default function Chat() {
@@ -105,10 +113,15 @@ export default function Chat() {
     return () => sub.remove();
   }, [resetConversation]);
 
+  const scrollToBottom = useCallback((animated = true) => {
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToEnd({ animated });
+    });
+  }, []);
+
   useEffect(() => {
-    const t = setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 0);
-    return () => clearTimeout(t);
-  }, [items.length]);
+    scrollToBottom(true);
+  }, [items.length, scrollToBottom]);
 
   const lastAssistant = useMemo(() => {
     for (let i = items.length - 1; i >= 0; i--) {
@@ -132,6 +145,7 @@ export default function Chat() {
     setItems((prev) => [...prev, { role: "user", text: message }]);
     setText("");
     setSending(true);
+    scrollToBottom(true);
 
     try {
       const sid = sessionId || (await getOrCreateSession({ forceNew: true }));
@@ -167,251 +181,382 @@ export default function Chat() {
       ]);
     } finally {
       setSending(false);
+      scrollToBottom(true);
     }
   }
 
   const canSend = text.trim().length > 0 && !sending;
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <KeyboardAvoidingView
-        style={styles.safe}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
-        {/* Top Bar */}
-        <View style={styles.topBar}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.title}>Vinnie’s Brain</Text>
-            {!!header && <Text style={styles.subtitle}>{header}</Text>}
-          </View>
+    <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
+      <StatusBar barStyle="light-content" />
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+        <KeyboardAvoidingView
+          style={styles.safe}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          // This offset is the #1 thing that prevents the keyboard from covering your input.
+          // If you have a nav header, increase this (try 40–90).
+          keyboardVerticalOffset={Platform.OS === "ios" ? 88 : 0}
+        >
+          {/* Top Bar
+          <View style={styles.topBar}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.title}>Vinnie’s Brain</Text>
+              {!!header && <Text style={styles.subtitle}>{header}</Text>}
+            </View>
 
-          <Pressable onPress={resetConversation} style={styles.resetBtn}>
-            <Text style={styles.resetText}>New</Text>
-          </Pressable>
-        </View>
+            <Pressable
+              onPress={resetConversation}
+              style={({ pressed }) => [
+                styles.resetBtn,
+                pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] },
+              ]}
+            >
+              <Text style={styles.resetText}>New</Text>
+            </Pressable>
+          // </View> */}
 
-        {/* Messages */}
-        <FlatList
-          ref={listRef}
-          data={items}
-          keyExtractor={(_, i) => String(i)}
-          contentContainerStyle={styles.listContent}
-          keyboardShouldPersistTaps="handled"
-          renderItem={({ item }) => {
-            const isUser = item.role === "user";
-            const used = item.meta?.usedArticles || [];
+          {/* Messages */}
+          <FlatList
+            ref={listRef}
+            data={items}
+            keyExtractor={(_, i) => String(i)}
+            contentContainerStyle={styles.listContent}
+            keyboardShouldPersistTaps="handled"
+            onContentSizeChange={() => scrollToBottom(false)}
+            renderItem={({ item }) => {
+              const isUser = item.role === "user";
+              const used = item.meta?.usedArticles || [];
 
-            return (
-              <View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
-                <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
-                  <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>
-                    {item.text}
-                  </Text>
-
-                  {/* Sources (assistant only) */}
-                  {!isUser && used.length > 0 && (
-                    <View style={styles.sourcesWrap}>
-                      <Text style={styles.sourcesLabel}>Sources used:</Text>
-                      <Text style={styles.sourcesText}>
-                        {used.map((u) => u.title).join(" • ")}
-                      </Text>
+              return (
+                <View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
+                  {!isUser && (
+                    <View style={styles.avatar}>
+                      <Text style={styles.avatarText}>{initials("VB")}</Text>
                     </View>
                   )}
+
+                  <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
+                    <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>
+                      {item.text}
+                    </Text>
+
+                    {!isUser && used.length > 0 && (
+                      <View style={styles.sourcesWrap}>
+                        <Text style={styles.sourcesLabel}>Sources used</Text>
+                        <Text style={styles.sourcesText}>{used.map((u) => u.title).join(" • ")}</Text>
+                      </View>
+                    )}
+                  </View>
                 </View>
-              </View>
-            );
-          }}
-          ListFooterComponent={
-            sending ? (
-              <View style={styles.typingRow}>
-                <View style={[styles.bubble, styles.aiBubble]}>
-                  <ActivityIndicator />
-                  <Text style={styles.typingText}>Thinking…</Text>
+              );
+            }}
+            ListFooterComponent={
+              sending ? (
+                <View style={[styles.row, styles.rowLeft, { marginTop: 2 }]}>
+                  <View style={styles.avatar}>
+                    <Text style={styles.avatarText}>{initials("VB")}</Text>
+                  </View>
+                  <View style={[styles.bubble, styles.aiBubble, styles.typingBubble]}>
+                    <ActivityIndicator />
+                    <Text style={styles.typingText}>Thinking…</Text>
+                  </View>
                 </View>
-              </View>
-            ) : null
-          }
-        />
-
-        {/* Quick chips (helpful always, but keep them only when conversation is short) */}
-        {items.length <= 2 && (
-          <View style={styles.chipsWrap}>
-            <View style={styles.chipsRow}>
-              {QUICK_CHIPS.map((c) => (
-                <Pressable key={c} onPress={() => onSend(c)} style={styles.chip} disabled={sending}>
-                  <Text style={styles.chipText}>{c}</Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
-        )}
-
-        {/* YES / NO CONTROLS (only when it looks appropriate) */}
-        {showBinaryControls && (
-          <View style={styles.binaryRow}>
-            <Pressable
-              style={[styles.binaryBtn, styles.yesBtn]}
-              disabled={sending}
-              onPress={() => onSend("yes")}
-            >
-              <Text style={styles.binaryText}>Yes</Text>
-            </Pressable>
-
-            <Pressable
-              style={[styles.binaryBtn, styles.noBtn]}
-              disabled={sending}
-              onPress={() => onSend("no")}
-            >
-              <Text style={styles.binaryText}>No</Text>
-            </Pressable>
-
-            <Pressable
-              style={[styles.binaryBtn, styles.skipBtn]}
-              disabled={sending}
-              onPress={() => onSend("skip")}
-            >
-              <Text style={styles.binaryText}>Not sure</Text>
-            </Pressable>
-          </View>
-        )}
-
-        {/* Escalate */}
-        {showEscalate && (
-          <Pressable
-            style={styles.escalate}
-            onPress={() =>
-              router.push({ pathname: "/escalate", params: { year: year ? String(year) : "" } })
+              ) : null
             }
-          >
-            <Text style={styles.escalateText}>Request help (email)</Text>
-          </Pressable>
-        )}
+          />
 
-        {/* Text Input (ALWAYS ON) */}
-        <View style={styles.inputWrap}>
-          <View style={styles.inputCard}>
-            <TextInput
-              value={text}
-              onChangeText={setText}
-              placeholder="Type your message…"
-              placeholderTextColor="#9CA3AF"
-              style={styles.input}
-              multiline
-              editable={!sending}
-            />
+          {/* Quick chips */}
+          {items.length <= 2 && (
+            <View style={styles.chipsWrap}>
+              <View style={styles.chipsRow}>
+                {QUICK_CHIPS.map((c) => (
+                  <Pressable
+                    key={c}
+                    onPress={() => onSend(c)}
+                    style={({ pressed }) => [
+                      styles.chip,
+                      pressed && { opacity: 0.85, transform: [{ scale: 0.99 }] },
+                    ]}
+                    disabled={sending}
+                  >
+                    <Text style={styles.chipText}>{c}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          )}
 
+          {/* YES / NO controls */}
+          {showBinaryControls && (
+            <View style={styles.binaryRow}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.binaryBtn,
+                  styles.yesBtn,
+                  pressed && { opacity: 0.9 },
+                ]}
+                disabled={sending}
+                onPress={() => onSend("yes")}
+              >
+                <Text style={styles.binaryText}>Yes</Text>
+              </Pressable>
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.binaryBtn,
+                  styles.noBtn,
+                  pressed && { opacity: 0.9 },
+                ]}
+                disabled={sending}
+                onPress={() => onSend("no")}
+              >
+                <Text style={styles.binaryText}>No</Text>
+              </Pressable>
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.binaryBtn,
+                  styles.skipBtn,
+                  pressed && { opacity: 0.9 },
+                ]}
+                disabled={sending}
+                onPress={() => onSend("skip")}
+              >
+                <Text style={styles.binaryText}>Not sure</Text>
+              </Pressable>
+            </View>
+          )}
+
+          {/* Escalate */}
+          {showEscalate && (
             <Pressable
-              onPress={() => onSend()}
-              disabled={!canSend}
-              style={[styles.sendBtn, !canSend && styles.sendBtnDisabled]}
+              style={({ pressed }) => [
+                styles.escalate,
+                pressed && { opacity: 0.9, transform: [{ scale: 0.99 }] },
+              ]}
+              onPress={() =>
+                router.push({ pathname: "/escalate", params: { year: year ? String(year) : "" } })
+              }
             >
-              <Text style={styles.sendText}>Send</Text>
+              <Text style={styles.escalateText}>Request help (email)</Text>
+              <Text style={styles.escalateSub}>Share photos and details with the team.</Text>
             </Pressable>
+          )}
+
+          {/* Input */}
+          <View style={styles.inputWrap}>
+            <View style={styles.inputCard}>
+              <TextInput
+                value={text}
+                onChangeText={setText}
+                placeholder="Type your message…"
+                placeholderTextColor="rgba(255,255,255,0.45)"
+                style={styles.input}
+                multiline
+                editable={!sending}
+                returnKeyType="send"
+                onSubmitEditing={() => onSend()}
+                blurOnSubmit={false}
+              />
+
+              <Pressable
+                onPress={() => onSend()}
+                disabled={!canSend}
+                style={({ pressed }) => [
+                  styles.sendBtn,
+                  !canSend && styles.sendBtnDisabled,
+                  pressed && canSend && { opacity: 0.9, transform: [{ scale: 0.99 }] },
+                ]}
+              >
+                <Text style={styles.sendText}>Send</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.hint}>
+              Tip: include where the leak is, when it happens, and if it’s dripping.
+            </Text>
           </View>
-        </View>
-      </KeyboardAvoidingView>
+        </KeyboardAvoidingView>
+      </TouchableWithoutFeedback>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#0B1220" },
+  safe: { flex: 1, backgroundColor: "#0B0F14" },
 
   topBar: {
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
     flexDirection: "row",
     alignItems: "center",
     borderBottomWidth: 1,
-    borderBottomColor: "rgba(255,255,255,0.1)",
+    borderBottomColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "#0B0F14",
   },
-  title: { color: "white", fontSize: 18, fontWeight: "800" },
-  subtitle: { color: "rgba(255,255,255,0.6)", fontSize: 12 },
+  title: { color: "white", fontSize: 18, fontWeight: "900" },
+  subtitle: { color: "rgba(255,255,255,0.55)", fontSize: 12, marginTop: 2 },
+
   resetBtn: {
-    backgroundColor: "rgba(255,255,255,0.12)",
-    paddingVertical: 6,
+    backgroundColor: "rgba(255,255,255,0.10)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 999,
   },
-  resetText: { color: "white", fontWeight: "700" },
+  resetText: { color: "white", fontWeight: "800" },
 
-  listContent: { padding: 14, gap: 10, flexGrow: 1 },
-  row: { flexDirection: "row" },
+  listContent: {
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 10,
+    gap: 10,
+    flexGrow: 1,
+  },
+
+  row: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 10,
+  },
   rowLeft: { justifyContent: "flex-start" },
   rowRight: { justifyContent: "flex-end" },
 
-  bubble: { maxWidth: "85%", padding: 12, borderRadius: 14 },
-  aiBubble: { backgroundColor: "white" },
-  userBubble: { backgroundColor: "#111827" },
-  bubbleText: { fontSize: 15 },
-  aiText: { color: "#0B1220" },
-  userText: { color: "white" },
+  avatar: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.10)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  avatarText: { color: "rgba(255,255,255,0.85)", fontSize: 11, fontWeight: "900" },
 
-  typingRow: { marginTop: 6 },
-  typingText: { marginLeft: 8, fontWeight: "600" },
+  bubble: {
+    maxWidth: "82%",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+  },
+  aiBubble: {
+    backgroundColor: "#111827",
+    borderColor: "rgba(255,255,255,0.10)",
+  },
+  userBubble: {
+    backgroundColor: "#2563EB",
+    borderColor: "rgba(255,255,255,0.10)",
+  },
+  bubbleText: { fontSize: 15, lineHeight: 20 },
+  aiText: { color: "rgba(255,255,255,0.92)" },
+  userText: { color: "white", fontWeight: "600" },
 
-  sourcesWrap: { marginTop: 10, paddingTop: 8, borderTopWidth: 1, borderTopColor: "rgba(0,0,0,0.08)" },
-  sourcesLabel: { fontSize: 12, fontWeight: "800", color: "rgba(11,18,32,0.75)" },
-  sourcesText: { marginTop: 2, fontSize: 12, color: "rgba(11,18,32,0.75)" },
+  typingBubble: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  typingText: { color: "rgba(255,255,255,0.75)", fontWeight: "700" },
+
+  sourcesWrap: {
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255,255,255,0.10)",
+  },
+  sourcesLabel: { fontSize: 11, fontWeight: "900", color: "rgba(255,255,255,0.65)" },
+  sourcesText: { marginTop: 2, fontSize: 12, color: "rgba(255,255,255,0.65)" },
 
   chipsWrap: { paddingHorizontal: 14, paddingBottom: 6 },
   chipsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   chip: {
     backgroundColor: "rgba(255,255,255,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
     borderRadius: 999,
     paddingVertical: 8,
     paddingHorizontal: 12,
   },
-  chipText: { color: "white", fontSize: 12, fontWeight: "600" },
+  chipText: { color: "rgba(255,255,255,0.92)", fontSize: 12, fontWeight: "700" },
 
   binaryRow: {
     flexDirection: "row",
     gap: 10,
-    padding: 14,
+    paddingHorizontal: 14,
+    paddingTop: 8,
+    paddingBottom: 8,
   },
   binaryBtn: {
     flex: 1,
-    paddingVertical: 14,
+    paddingVertical: 12,
     borderRadius: 14,
     alignItems: "center",
   },
-  yesBtn: { backgroundColor: "#166534" },
-  noBtn: { backgroundColor: "#7f1d1d" },
+  yesBtn: { backgroundColor: "#16A34A" },
+  noBtn: { backgroundColor: "#EF4444" },
   skipBtn: { backgroundColor: "#374151" },
-  binaryText: { color: "white", fontSize: 16, fontWeight: "800" },
+  binaryText: { color: "white", fontSize: 15, fontWeight: "900" },
 
   escalate: {
-    margin: 14,
+    marginHorizontal: 14,
+    marginTop: 4,
+    marginBottom: 10,
     padding: 14,
-    borderRadius: 14,
-    backgroundColor: "rgba(239,68,68,0.2)",
-    alignItems: "center",
+    borderRadius: 16,
+    backgroundColor: "rgba(239,68,68,0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(239,68,68,0.25)",
+    alignItems: "flex-start",
   },
-  escalateText: { color: "white", fontWeight: "800" },
+  escalateText: { color: "white", fontWeight: "900", fontSize: 15 },
+  escalateSub: { marginTop: 4, color: "rgba(255,255,255,0.7)", fontSize: 12 },
 
   inputWrap: {
-    padding: 14,
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 10,
     borderTopWidth: 1,
-    borderTopColor: "rgba(255,255,255,0.1)",
+    borderTopColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "#0B0F14",
   },
   inputCard: {
     flexDirection: "row",
     gap: 10,
     padding: 10,
-    borderRadius: 16,
+    borderRadius: 18,
     backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    alignItems: "flex-end",
   },
   input: {
     flex: 1,
     color: "white",
     minHeight: 44,
-    maxHeight: 120,
+    maxHeight: 130,
+    fontSize: 15,
+    lineHeight: 20,
+    paddingTop: 10,
+    paddingBottom: 10,
   },
   sendBtn: {
-    backgroundColor: "white",
-    paddingVertical: 12,
-    paddingHorizontal: 14,
+    height: 44,
+    paddingHorizontal: 16,
     borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "white",
   },
-  sendBtnDisabled: { backgroundColor: "rgba(255,255,255,0.4)" },
-  sendText: { color: "#0B1220", fontWeight: "900" },
+  sendBtnDisabled: { backgroundColor: "rgba(255,255,255,0.35)" },
+  sendText: { color: "#0B0F14", fontWeight: "900" },
+
+  hint: {
+    marginTop: 6,
+    color: "rgba(255,255,255,0.45)",
+    fontSize: 11,
+  },
 });

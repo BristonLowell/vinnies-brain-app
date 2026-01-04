@@ -1,6 +1,7 @@
 {
   "expo": {
     "name": "Vinnie’s Brain",
+    "owner": "vinnies",
     "slug": "vinnies-brain-app",
     "version": "1.0.1",
     "orientation": "portrait",
@@ -8,7 +9,6 @@
     "scheme": "vinniesbrainapp",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.vinnies.vinniesbrain",
@@ -17,7 +17,6 @@
         "ITSAppUsesNonExemptEncryption": false
       }
     },
-
     "android": {
       "package": "com.brizzalicious.vinniesbrainapp",
       "adaptiveIcon": {
@@ -28,12 +27,10 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
-
     "web": {
       "output": "static",
       "favicon": "./assets/images/favicon.png"
     },
-
     "plugins": [
       "expo-router",
       [
@@ -49,12 +46,10 @@
         }
       ]
     ],
-
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
     },
-
     "extra": {
       "router": {},
       "eas": {

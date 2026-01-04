@@ -38,6 +38,20 @@ function initials(label: string) {
   return parts.map((p) => p[0]?.toUpperCase()).join("");
 }
 
+/**
+ * Live chat availability: Mon–Fri, 8:00am–5:00pm Pacific
+ * (5pm treated as closed: hour < 17)
+ */
+function isLiveChatHours(): boolean {
+  const now = new Date();
+  const ptNow = new Date(now.toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
+  const hour = ptNow.getHours(); // 0–23
+  const day = ptNow.getDay(); // 0=Sun ... 6=Sat
+  const isWeekday = day >= 1 && day <= 5;
+  const isBusinessHours = hour >= 8 && hour < 17;
+  return isWeekday && isBusinessHours;
+}
+
 export default function Chat() {
   const router = useRouter();
   const params = useLocalSearchParams<{ year?: string; category?: string }>();
@@ -48,7 +62,6 @@ export default function Chat() {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [showEscalate, setShowEscalate] = useState(false);
-
   const [expectsYesNo, setExpectsYesNo] = useState(false);
 
   const listRef = useRef<FlatList<ChatItem>>(null);
@@ -114,9 +127,7 @@ export default function Chat() {
     setText("");
     setSending(true);
 
-    // ✅ Hide keyboard while AI responds
     Keyboard.dismiss();
-
     scrollToBottom(true);
 
     try {
@@ -157,8 +168,6 @@ export default function Chat() {
     } finally {
       setSending(false);
       scrollToBottom(true);
-
-      // ✅ Bring keyboard back after AI finishes
       requestAnimationFrame(() => {
         inputRef.current?.focus();
       });
@@ -166,6 +175,9 @@ export default function Chat() {
   }
 
   const canSend = text.trim().length > 0 && !sending;
+
+  // Used for label/subtext (re-check also happens on press)
+  const liveChatAvailable = isLiveChatHours();
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
@@ -176,12 +188,7 @@ export default function Chat() {
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         keyboardVerticalOffset={Platform.OS === "ios" ? 88 : 0}
       >
-        {/* ✅ Tap-anywhere overlay that DOES NOT block scrolling */}
-        <Pressable
-          onPress={Keyboard.dismiss}
-          style={StyleSheet.absoluteFill}
-          pointerEvents="box-none"
-        >
+        <Pressable onPress={Keyboard.dismiss} style={StyleSheet.absoluteFill} pointerEvents="box-none">
           <View style={StyleSheet.absoluteFill} pointerEvents="none" />
         </Pressable>
 
@@ -214,9 +221,7 @@ export default function Chat() {
                   {!isUser && used.length > 0 && (
                     <View style={styles.sourcesWrap}>
                       <Text style={styles.sourcesLabel}>Sources used</Text>
-                      <Text style={styles.sourcesText}>
-                        {used.map((u) => u.title).join(" • ")}
-                      </Text>
+                      <Text style={styles.sourcesText}>{used.map((u) => u.title).join(" • ")}</Text>
                     </View>
                   )}
                 </View>
@@ -264,12 +269,22 @@ export default function Chat() {
               styles.escalate,
               pressed && { opacity: 0.9, transform: [{ scale: 0.99 }] },
             ]}
-            onPress={() =>
-              router.push({ pathname: "/escalate", params: { year: year ? String(year) : "" } })
-            }
+            onPress={() => {
+              if (isLiveChatHours()) {
+                router.push("/live-chat");
+              } else {
+                router.push({ pathname: "/escalate", params: { year: year ? String(year) : "" } });
+              }
+            }}
           >
-            <Text style={styles.escalateText}>Request help (email)</Text>
-            <Text style={styles.escalateSub}>Share photos and details with the team.</Text>
+            <Text style={styles.escalateText}>
+              {liveChatAvailable ? "Chat with Vinnies now" : "Request help (email)"}
+            </Text>
+            <Text style={styles.escalateSub}>
+              {liveChatAvailable
+                ? "You’re chatting directly with the owner."
+                : "Share photos and details — we’ll follow up next business day."}
+            </Text>
           </Pressable>
         )}
 

@@ -7,21 +7,21 @@ import {
   StyleSheet,
   ScrollView,
   Alert,
+  StatusBar,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { API_BASE_URL } from "../src/config";
 
-function linesToArray(s: string) {
-  return s
-    .split("\n")
-    .map((x) => x.trim())
-    .filter(Boolean);
-}
+type QItem = { q: string; yes?: string; no?: string };
 
-type Branch = { yes: string; no: string };
+function normalizeLines(items: string[]) {
+  return items.map((x) => x.trim()).filter(Boolean);
+}
 
 export default function Admin() {
   const [adminKey, setAdminKey] = useState("");
 
+  // Article basics
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState("Water/Leaks");
   const [severity, setSeverity] = useState("Medium");
@@ -29,105 +29,112 @@ export default function Admin() {
   const [yearsMax, setYearsMax] = useState("2025");
   const [summary, setSummary] = useState("");
 
-  const [clarifying, setClarifying] = useState("");
-  const [steps, setSteps] = useState("");
-  const [notes, setNotes] = useState("");
-  const [stop, setStop] = useState("");
+  // List builders
+  const [questions, setQuestions] = useState<QItem[]>([]);
+  const [steps, setSteps] = useState<string[]>([]);
+  const [notes, setNotes] = useState<string[]>([]);
+  const [stop, setStop] = useState<string[]>([]);
   const [nextStep, setNextStep] = useState("");
 
-  // Option B: per-question Yes/No actions (builds decision_tree automatically)
-  const [branchYes, setBranchYes] = useState("");
-  const [branchNo, setBranchNo] = useState("");
+  // Draft inputs
+  const [qDraft, setQDraft] = useState("");
+  const [qYesDraft, setQYesDraft] = useState("");
+  const [qNoDraft, setQNoDraft] = useState("");
+
+  const [stepDraft, setStepDraft] = useState("");
+  const [noteDraft, setNoteDraft] = useState("");
+  const [stopDraft, setStopDraft] = useState("");
 
   const [saving, setSaving] = useState(false);
 
-  const clarifyingList = useMemo(() => linesToArray(clarifying), [clarifying]);
+  const canAddQuestion = useMemo(() => qDraft.trim().length > 0, [qDraft]);
+  const canAddStep = useMemo(() => stepDraft.trim().length > 0, [stepDraft]);
+  const canAddNote = useMemo(() => noteDraft.trim().length > 0, [noteDraft]);
+  const canAddStop = useMemo(() => stopDraft.trim().length > 0, [stopDraft]);
 
-  // Parse the “Yes actions” and “No actions” into arrays aligned by question index
-  const yesActions = useMemo(() => linesToArray(branchYes), [branchYes]);
-  const noActions = useMemo(() => linesToArray(branchNo), [branchNo]);
+  function addQuestion() {
+    const q = qDraft.trim();
+    if (!q) return;
 
-  function buildDecisionTree(questions: string[]) {
-    // For each question index i, we build q{i}: { yes: {say}, no: {say} }
-    // If a row is blank, we simply omit that branch.
-    const tree: Record<string, any> = {};
-    questions.forEach((_, i) => {
-      const yes = yesActions[i];
-      const no = noActions[i];
+    const yes = qYesDraft.trim();
+    const no = qNoDraft.trim();
 
-      if ((yes && yes.trim()) || (no && no.trim())) {
-        const node: any = {};
-        if (yes && yes.trim()) node.yes = { say: yes.trim() };
-        if (no && no.trim()) node.no = { say: no.trim() };
-        tree[`q${i}`] = node;
-      }
-    });
-    return tree;
+    setQuestions((prev) => [...prev, { q, yes: yes || undefined, no: no || undefined }]);
+    setQDraft("");
+    setQYesDraft("");
+    setQNoDraft("");
   }
 
-  function validateBranching(questions: string[]) {
-    // Not required to have branches — but if user enters any,
-    // warn if counts don’t match so they don’t accidentally misalign.
-    const hasAnyBranches =
-      yesActions.some((x) => x?.trim()) || noActions.some((x) => x?.trim());
+  function removeQuestion(idx: number) {
+    setQuestions((prev) => prev.filter((_, i) => i !== idx));
+  }
 
-    if (!hasAnyBranches) return;
-
-    if (yesActions.length > 0 && yesActions.length !== questions.length) {
-      Alert.alert(
-        "Decision Tree mismatch",
-        `You have ${questions.length} clarifying questions, but ${yesActions.length} YES lines.\n\nFix: add/remove YES lines so they match question count (one per question).`
-      );
-      throw new Error("YES line count mismatch");
+  function addToList(kind: "steps" | "notes" | "stop") {
+    if (kind === "steps") {
+      const s = stepDraft.trim();
+      if (!s) return;
+      setSteps((prev) => [...prev, s]);
+      setStepDraft("");
+      return;
     }
 
-    if (noActions.length > 0 && noActions.length !== questions.length) {
-      Alert.alert(
-        "Decision Tree mismatch",
-        `You have ${questions.length} clarifying questions, but ${noActions.length} NO lines.\n\nFix: add/remove NO lines so they match question count (one per question).`
-      );
-      throw new Error("NO line count mismatch");
+    if (kind === "notes") {
+      const n = noteDraft.trim();
+      if (!n) return;
+      setNotes((prev) => [...prev, n]);
+      setNoteDraft("");
+      return;
     }
+
+    const st = stopDraft.trim();
+    if (!st) return;
+    setStop((prev) => [...prev, st]);
+    setStopDraft("");
+  }
+
+  function removeFromList(kind: "steps" | "notes" | "stop", idx: number) {
+    if (kind === "steps") return setSteps((prev) => prev.filter((_, i) => i !== idx));
+    if (kind === "notes") return setNotes((prev) => prev.filter((_, i) => i !== idx));
+    return setStop((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  function buildDecisionTree() {
+    // { q0: { yes: { say }, no: { say } }, q1: ... }
+    const tree: Record<string, any> = {};
+    questions.forEach((item, i) => {
+      const node: any = {};
+      if (item.yes?.trim()) node.yes = { say: item.yes.trim() };
+      if (item.no?.trim()) node.no = { say: item.no.trim() };
+      if (Object.keys(node).length) tree[`q${i}`] = node;
+    });
+    return tree;
   }
 
   async function save() {
     if (!adminKey.trim())
       return Alert.alert("Missing admin key", "Enter your ADMIN_API_KEY.");
-    if (!title.trim())
-      return Alert.alert("Missing title", "Title is required.");
-    if (!summary.trim())
-      return Alert.alert("Missing summary", "Summary is required.");
-    if (!nextStep.trim())
-      return Alert.alert("Missing next step", "Next step is required.");
+    if (!title.trim()) return Alert.alert("Missing title", "Title is required.");
+    if (!summary.trim()) return Alert.alert("Missing summary", "Summary is required.");
+    if (!nextStep.trim()) return Alert.alert("Missing next step", "Next step is required.");
 
-    const questions = clarifyingList;
-
-    // If they’re using Option B fields, ensure alignment
-    try {
-      validateBranching(questions);
-    } catch {
-      return;
-    }
-
-    const decisionTree = buildDecisionTree(questions);
+    const clarifying_questions = normalizeLines(questions.map((q) => q.q));
+    const decision_tree = buildDecisionTree();
 
     setSaving(true);
     try {
       const payload = {
-        title,
-        category,
-        severity,
+        title: title.trim(),
+        category: category.trim(),
+        severity: severity.trim(),
         years_min: Number(yearsMin),
         years_max: Number(yearsMax),
-        customer_summary: summary,
-        clarifying_questions: questions,
-        steps: linesToArray(steps),
-        model_year_notes: linesToArray(notes),
-        stop_and_escalate: linesToArray(stop),
-        next_step: nextStep,
-
-        // NEW: decision tree
-        decision_tree: decisionTree,
+        customer_summary: summary.trim(),
+        clarifying_questions,
+        steps: normalizeLines(steps),
+        model_year_notes: normalizeLines(notes),
+        stop_and_escalate: normalizeLines(stop),
+        next_step: nextStep.trim(),
+        decision_tree,
       };
 
       const res = await fetch(`${API_BASE_URL}/v1/admin/kb/upsert`, {
@@ -147,18 +154,14 @@ export default function Admin() {
       const data = await res.json();
       Alert.alert("Saved ✅", `Article ID: ${data.id}`);
 
-      // Clear form (optional)
+      // Clear (keep key)
       setTitle("");
       setSummary("");
-      setClarifying("");
-      setSteps("");
-      setNotes("");
-      setStop("");
+      setQuestions([]);
+      setSteps([]);
+      setNotes([]);
+      setStop([]);
       setNextStep("");
-
-      // Clear decision tree inputs
-      setBranchYes("");
-      setBranchNo("");
     } catch (e: any) {
       Alert.alert("Save failed", e.message);
     } finally {
@@ -167,235 +170,422 @@ export default function Admin() {
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Admin: Add Knowledge Article</Text>
-      <Text style={styles.small}>
-        This writes to your Supabase DB and creates embeddings automatically.
-      </Text>
+    <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
+      <StatusBar barStyle="light-content" />
+      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+        <Text style={styles.pageTitle}>Admin</Text>
+        <Text style={styles.pageSub}>
+          Create / update knowledge base articles. Lists are item-by-item to prevent “jumbled” entries.
+        </Text>
 
-      <Text style={styles.label}>Admin Key</Text>
-      <Text style={styles.help}>
-        Internal security key required to save articles. This is never shown to
-        customers.
-      </Text>
-      <TextInput
-        style={styles.input}
-        value={adminKey}
-        onChangeText={setAdminKey}
-        placeholder="Paste your admin key"
-      />
+        {/* Security */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Security</Text>
+          <Text style={styles.help}>Admin key is required to save. Never shown to customers.</Text>
+          <TextInput
+            style={styles.input}
+            value={adminKey}
+            onChangeText={setAdminKey}
+            placeholder="Paste ADMIN_API_KEY"
+            placeholderTextColor="rgba(255,255,255,0.35)"
+            autoCapitalize="none"
+          />
+        </View>
 
-      <Text style={styles.label}>Title</Text>
-      <Text style={styles.help}>
-        Short, searchable problem description written how a customer would say
-        it. Example: "Water stain under curbside window after rain"
-      </Text>
-      <TextInput
-        style={styles.input}
-        value={title}
-        onChangeText={setTitle}
-        placeholder='e.g., Water stain under curbside window after rain'
-      />
+        {/* Basics */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Article basics</Text>
 
-      <Text style={styles.label}>Category</Text>
-      <Text style={styles.help}>
-        High-level issue group used for organization and filtering (Water/Leaks,
-        Electrical, Interior, Exterior, HVAC, etc.).
-      </Text>
-      <TextInput style={styles.input} value={category} onChangeText={setCategory} />
+          <Text style={styles.label}>Title</Text>
+          <TextInput
+            style={styles.input}
+            value={title}
+            onChangeText={setTitle}
+            placeholder='e.g., Water stain under curbside window after rain'
+            placeholderTextColor="rgba(255,255,255,0.35)"
+          />
 
-      <Text style={styles.label}>Severity</Text>
-      <Text style={styles.help}>
-        Overall risk level if unresolved. Use Low, Medium, or High.
-      </Text>
-      <TextInput
-        style={styles.input}
-        value={severity}
-        onChangeText={setSeverity}
-        placeholder="Low / Medium / High"
-      />
+          <View style={styles.row}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>Category</Text>
+              <TextInput
+                style={styles.input}
+                value={category}
+                onChangeText={setCategory}
+                placeholder="Water/Leaks"
+                placeholderTextColor="rgba(255,255,255,0.35)"
+              />
+            </View>
+            <View style={{ width: 10 }} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>Severity</Text>
+              <TextInput
+                style={styles.input}
+                value={severity}
+                onChangeText={setSeverity}
+                placeholder="Low / Medium / High"
+                placeholderTextColor="rgba(255,255,255,0.35)"
+              />
+            </View>
+          </View>
 
-      <View style={styles.row}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.label}>Applies To (Model Years)</Text>
+          <View style={styles.row}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>Years min</Text>
+              <TextInput
+                style={styles.input}
+                value={yearsMin}
+                onChangeText={setYearsMin}
+                keyboardType="number-pad"
+                placeholderTextColor="rgba(255,255,255,0.35)"
+              />
+            </View>
+            <View style={{ width: 10 }} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>Years max</Text>
+              <TextInput
+                style={styles.input}
+                value={yearsMax}
+                onChangeText={setYearsMax}
+                keyboardType="number-pad"
+                placeholderTextColor="rgba(255,255,255,0.35)"
+              />
+            </View>
+          </View>
+
+          <Text style={styles.label}>Customer summary</Text>
+          <TextInput
+            style={[styles.input, styles.multiline]}
+            value={summary}
+            onChangeText={setSummary}
+            multiline
+            placeholder="Plain-language explanation customers will read first…"
+            placeholderTextColor="rgba(255,255,255,0.35)"
+          />
+        </View>
+
+        {/* Clarifying Questions Builder */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Clarifying questions</Text>
           <Text style={styles.help}>
-            Enter the minimum and maximum model years this issue commonly
-            applies to.
+            Add one question at a time. Optional: add a YES action and/or NO action for that question
+            (builds decision_tree automatically).
+          </Text>
+
+          <Text style={styles.label}>Question</Text>
+          <TextInput
+            style={[styles.input, styles.multilineSm]}
+            value={qDraft}
+            onChangeText={setQDraft}
+            multiline
+            placeholder='e.g., "Does this happen only during rain or also when washing?"'
+            placeholderTextColor="rgba(255,255,255,0.35)"
+          />
+
+          <View style={styles.row}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>If YES, say/do (optional)</Text>
+              <TextInput
+                style={[styles.input, styles.multilineSm]}
+                value={qYesDraft}
+                onChangeText={setQYesDraft}
+                multiline
+                placeholder="Action if the user answers YES…"
+                placeholderTextColor="rgba(255,255,255,0.35)"
+              />
+            </View>
+            <View style={{ width: 10 }} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>If NO, say/do (optional)</Text>
+              <TextInput
+                style={[styles.input, styles.multilineSm]}
+                value={qNoDraft}
+                onChangeText={setQNoDraft}
+                multiline
+                placeholder="Action if the user answers NO…"
+                placeholderTextColor="rgba(255,255,255,0.35)"
+              />
+            </View>
+          </View>
+
+          <Pressable
+            onPress={addQuestion}
+            disabled={!canAddQuestion}
+            style={({ pressed }) => [
+              styles.smallBtn,
+              !canAddQuestion && styles.smallBtnDisabled,
+              pressed && canAddQuestion && { opacity: 0.92 },
+            ]}
+          >
+            <Text style={styles.smallBtnText}>Add question</Text>
+          </Pressable>
+
+          {questions.length > 0 && (
+            <View style={{ marginTop: 10, gap: 10 }}>
+              {questions.map((q, i) => (
+                <View key={`${q.q}-${i}`} style={styles.itemCard}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.itemTitle}>{i + 1}. {q.q}</Text>
+                    {(q.yes || q.no) && (
+                      <View style={{ marginTop: 6, gap: 4 }}>
+                        {!!q.yes && <Text style={styles.itemMeta}>YES → {q.yes}</Text>}
+                        {!!q.no && <Text style={styles.itemMeta}>NO → {q.no}</Text>}
+                      </View>
+                    )}
+                  </View>
+
+                  <Pressable
+                    onPress={() => removeQuestion(i)}
+                    style={({ pressed }) => [styles.removeBtn, pressed && { opacity: 0.85 }]}
+                  >
+                    <Text style={styles.removeText}>Remove</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+
+        {/* Steps */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Troubleshooting steps</Text>
+          <Text style={styles.help}>Add one step at a time. Keep it clear + safe.</Text>
+
+          <TextInput
+            style={[styles.input, styles.multilineSm]}
+            value={stepDraft}
+            onChangeText={setStepDraft}
+            multiline
+            placeholder="e.g., Check the weep holes and clear debris…"
+            placeholderTextColor="rgba(255,255,255,0.35)"
+          />
+
+          <Pressable
+            onPress={() => addToList("steps")}
+            disabled={!canAddStep}
+            style={({ pressed }) => [
+              styles.smallBtn,
+              !canAddStep && styles.smallBtnDisabled,
+              pressed && canAddStep && { opacity: 0.92 },
+            ]}
+          >
+            <Text style={styles.smallBtnText}>Add step</Text>
+          </Pressable>
+
+          {steps.length > 0 && (
+            <View style={{ marginTop: 10, gap: 10 }}>
+              {steps.map((s, i) => (
+                <View key={`${s}-${i}`} style={styles.itemCard}>
+                  <Text style={[styles.itemTitle, { flex: 1 }]}>{i + 1}. {s}</Text>
+                  <Pressable
+                    onPress={() => removeFromList("steps", i)}
+                    style={({ pressed }) => [styles.removeBtn, pressed && { opacity: 0.85 }]}
+                  >
+                    <Text style={styles.removeText}>Remove</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+
+        {/* Notes */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Model year notes</Text>
+          <Text style={styles.help}>Differences or warnings specific to certain years.</Text>
+
+          <TextInput
+            style={[styles.input, styles.multilineSm]}
+            value={noteDraft}
+            onChangeText={setNoteDraft}
+            multiline
+            placeholder="e.g., 2018–2020 units may route this wire differently…"
+            placeholderTextColor="rgba(255,255,255,0.35)"
+          />
+
+          <Pressable
+            onPress={() => addToList("notes")}
+            disabled={!canAddNote}
+            style={({ pressed }) => [
+              styles.smallBtn,
+              !canAddNote && styles.smallBtnDisabled,
+              pressed && canAddNote && { opacity: 0.92 },
+            ]}
+          >
+            <Text style={styles.smallBtnText}>Add note</Text>
+          </Pressable>
+
+          {notes.length > 0 && (
+            <View style={{ marginTop: 10, gap: 10 }}>
+              {notes.map((n, i) => (
+                <View key={`${n}-${i}`} style={styles.itemCard}>
+                  <Text style={[styles.itemTitle, { flex: 1 }]}>{i + 1}. {n}</Text>
+                  <Pressable
+                    onPress={() => removeFromList("notes", i)}
+                    style={({ pressed }) => [styles.removeBtn, pressed && { opacity: 0.85 }]}
+                  >
+                    <Text style={styles.removeText}>Remove</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+
+        {/* Stop & Escalate */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Stop & escalate</Text>
+          <Text style={styles.help}>Conditions that require stopping DIY + contacting a pro.</Text>
+
+          <TextInput
+            style={[styles.input, styles.multilineSm]}
+            value={stopDraft}
+            onChangeText={setStopDraft}
+            multiline
+            placeholder="e.g., Soft floor near electrical outlet…"
+            placeholderTextColor="rgba(255,255,255,0.35)"
+          />
+
+          <Pressable
+            onPress={() => addToList("stop")}
+            disabled={!canAddStop}
+            style={({ pressed }) => [
+              styles.smallBtn,
+              !canAddStop && styles.smallBtnDisabled,
+              pressed && canAddStop && { opacity: 0.92 },
+            ]}
+          >
+            <Text style={styles.smallBtnText}>Add stop condition</Text>
+          </Pressable>
+
+          {stop.length > 0 && (
+            <View style={{ marginTop: 10, gap: 10 }}>
+              {stop.map((st, i) => (
+                <View key={`${st}-${i}`} style={styles.itemCard}>
+                  <Text style={[styles.itemTitle, { flex: 1 }]}>{i + 1}. {st}</Text>
+                  <Pressable
+                    onPress={() => removeFromList("stop", i)}
+                    style={({ pressed }) => [styles.removeBtn, pressed && { opacity: 0.85 }]}
+                  >
+                    <Text style={styles.removeText}>Remove</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+
+        {/* Next Step */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Next step</Text>
+          <Text style={styles.help}>
+            What the customer should do if it still isn’t solved after these steps.
           </Text>
           <TextInput
-            style={styles.input}
-            value={yearsMin}
-            onChangeText={setYearsMin}
-            keyboardType="number-pad"
+            style={[styles.input, styles.multiline]}
+            value={nextStep}
+            onChangeText={setNextStep}
+            multiline
+            placeholder="e.g., If the leak continues, request help and include photos of…"
+            placeholderTextColor="rgba(255,255,255,0.35)"
           />
         </View>
-        <View style={{ width: 10 }} />
-        <View style={{ flex: 1 }}>
-          <Text style={styles.label}>Years Max</Text>
-          <TextInput
-            style={styles.input}
-            value={yearsMax}
-            onChangeText={setYearsMax}
-            keyboardType="number-pad"
-          />
-        </View>
-      </View>
 
-      <Text style={styles.label}>Customer Summary</Text>
-      <Text style={styles.help}>
-        Plain-language explanation of the issue. This is the first thing
-        customers will read. Avoid technical jargon here.
-      </Text>
-      <TextInput
-        style={[styles.input, styles.multiline]}
-        value={summary}
-        onChangeText={setSummary}
-        multiline
-      />
+        {/* Save */}
+        <Pressable
+          style={({ pressed }) => [
+            styles.saveBtn,
+            saving && { opacity: 0.6 },
+            pressed && !saving && { opacity: 0.92, transform: [{ scale: 0.99 }] },
+          ]}
+          disabled={saving}
+          onPress={save}
+        >
+          <Text style={styles.saveText}>{saving ? "Saving…" : "Save Article"}</Text>
+        </Pressable>
 
-      <Text style={styles.label}>Clarifying Questions</Text>
-      <Text style={styles.help}>
-        One question per line. These help the AI narrow down the root cause.
-        Example: "Does this happen only during rain or also when washing?"
-      </Text>
-      <TextInput
-        style={[styles.input, styles.multiline]}
-        value={clarifying}
-        onChangeText={setClarifying}
-        multiline
-      />
-
-      {/* OPTION B SECTION */}
-      <Text style={styles.label}>Decision Tree (Option B): Yes/No Actions</Text>
-      <Text style={styles.help}>
-        One line per clarifying question. Line 1 corresponds to question 1, line
-        2 to question 2, etc.
-        {"\n\n"}
-        If the user answers YES/NO to that question, the AI will immediately
-        return the corresponding troubleshooting action as the next step.
-        {"\n\n"}
-        Leave a line blank if you don’t want a YES/NO branch for that question.
-      </Text>
-
-      <Text style={styles.label}>If YES, say/do… (one line per question)</Text>
-      <Text style={styles.help}>
-        Example for Q1: "Charge/replace batteries, then re-test the jack."
-      </Text>
-      <TextInput
-        style={[styles.input, styles.multiline]}
-        value={branchYes}
-        onChangeText={setBranchYes}
-        multiline
-        placeholder={
-          clarifyingList.length
-            ? clarifyingList.map((q, i) => `${i + 1}. (YES) for: ${q}`).join("\n")
-            : "1. (YES) action for question 1\n2. (YES) action for question 2\n..."
-        }
-      />
-
-      <Text style={styles.label}>If NO, say/do… (one line per question)</Text>
-      <Text style={styles.help}>
-        Example for Q1: "Okay — check fuse/power feed next."
-      </Text>
-      <TextInput
-        style={[styles.input, styles.multiline]}
-        value={branchNo}
-        onChangeText={setBranchNo}
-        multiline
-        placeholder={
-          clarifyingList.length
-            ? clarifyingList.map((q, i) => `${i + 1}. (NO) for: ${q}`).join("\n")
-            : "1. (NO) action for question 1\n2. (NO) action for question 2\n..."
-        }
-      />
-
-      <Text style={styles.label}>Troubleshooting Steps</Text>
-      <Text style={styles.help}>
-        One step per line. Clear, safe actions a customer or tech can take
-        before escalation.
-      </Text>
-      <TextInput
-        style={[styles.input, styles.multiline]}
-        value={steps}
-        onChangeText={setSteps}
-        multiline
-      />
-
-      <Text style={styles.label}>Model Year Notes</Text>
-      <Text style={styles.help}>
-        One note per line. Differences or warnings specific to certain model
-        years.
-      </Text>
-      <TextInput
-        style={[styles.input, styles.multiline]}
-        value={notes}
-        onChangeText={setNotes}
-        multiline
-      />
-
-      <Text style={styles.label}>Stop & Escalate</Text>
-      <Text style={styles.help}>
-        One condition per line that requires stopping DIY troubleshooting and
-        contacting a professional.
-      </Text>
-      <TextInput
-        style={[styles.input, styles.multiline]}
-        value={stop}
-        onChangeText={setStop}
-        multiline
-      />
-
-      <Text style={styles.label}>Next Step</Text>
-      <Text style={styles.help}>
-        What the customer should do if the issue continues after these steps.
-      </Text>
-      <TextInput
-        style={[styles.input, styles.multiline]}
-        value={nextStep}
-        onChangeText={setNextStep}
-        multiline
-      />
-
-      <Pressable
-        style={[styles.button, saving && { opacity: 0.5 }]}
-        disabled={saving}
-        onPress={save}
-      >
-        <Text style={styles.buttonText}>{saving ? "Saving..." : "Save Article"}</Text>
-      </Pressable>
-    </ScrollView>
+        <View style={{ height: 20 }} />
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 20, gap: 10 },
-  title: { fontSize: 20, fontWeight: "800" },
-  small: { fontSize: 12, opacity: 0.7, marginBottom: 8 },
+  safe: { flex: 1, backgroundColor: "#0B0F14" },
+  container: { padding: 16, gap: 12 },
 
-  label: { fontSize: 13, fontWeight: "700", marginTop: 10 },
-  help: {
-    fontSize: 12,
-    color: "#666",
-    marginBottom: 4,
-    lineHeight: 16,
+  pageTitle: { color: "white", fontSize: 22, fontWeight: "900" },
+  pageSub: { color: "rgba(255,255,255,0.6)", fontSize: 12, lineHeight: 17 },
+
+  card: {
+    borderRadius: 18,
+    padding: 14,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    gap: 10,
   },
+  cardTitle: { color: "white", fontSize: 15, fontWeight: "900" },
+
+  label: { color: "rgba(255,255,255,0.85)", fontSize: 12, fontWeight: "800" },
+  help: { color: "rgba(255,255,255,0.55)", fontSize: 12, lineHeight: 16 },
 
   input: {
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    backgroundColor: "rgba(255,255,255,0.07)",
     borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 10,
-    padding: 12,
+    borderColor: "rgba(255,255,255,0.10)",
+    color: "white",
   },
-  multiline: { minHeight: 80, textAlignVertical: "top" },
+  multiline: { minHeight: 110, textAlignVertical: "top" },
+  multilineSm: { minHeight: 64, textAlignVertical: "top" },
 
-  row: { flexDirection: "row", gap: 10 },
+  row: { flexDirection: "row" },
 
-  button: {
-    marginTop: 18,
-    backgroundColor: "black",
-    padding: 14,
-    borderRadius: 10,
+  smallBtn: {
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.10)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
     alignItems: "center",
+    justifyContent: "center",
   },
-  buttonText: { color: "white", fontWeight: "800" },
+  smallBtnDisabled: { opacity: 0.35 },
+  smallBtnText: { color: "white", fontWeight: "900" },
+
+  itemCard: {
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "flex-start",
+    padding: 12,
+    borderRadius: 16,
+    backgroundColor: "rgba(0,0,0,0.25)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  itemTitle: { color: "rgba(255,255,255,0.9)", fontWeight: "800", fontSize: 12, lineHeight: 16 },
+  itemMeta: { color: "rgba(255,255,255,0.65)", fontSize: 12, lineHeight: 16 },
+
+  removeBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: "rgba(239,68,68,0.14)",
+    borderWidth: 1,
+    borderColor: "rgba(239,68,68,0.22)",
+  },
+  removeText: { color: "white", fontWeight: "900", fontSize: 12 },
+
+  saveBtn: {
+    height: 54,
+    borderRadius: 18,
+    backgroundColor: "white",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 6,
+  },
+  saveText: { color: "#0B0F14", fontWeight: "900", fontSize: 15 },
 });

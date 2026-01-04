@@ -34,6 +34,10 @@ export default function Welcome() {
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <StatusBar barStyle="light-content" />
 
+      {/* Subtle background glow */}
+      <View pointerEvents="none" style={styles.bgGlowTop} />
+      <View pointerEvents="none" style={styles.bgGlowBottom} />
+
       <View style={styles.container}>
         {/* Logo / Title */}
         <Pressable
@@ -59,13 +63,13 @@ export default function Welcome() {
           <Text style={styles.cardTitle}>Start here</Text>
           <Text style={styles.cardBody}>
             Pick your Airstream year, then answer a few questions. I’ll guide you to the
-            most likely cause and the safest next steps.
+            most likely cause and the next best steps.
           </Text>
 
           <Pressable
             style={({ pressed }) => [
               styles.primaryBtn,
-              (!ready || pressed) && styles.primaryBtnPressed,
+              pressed && ready && styles.primaryBtnPressed,
               !ready && styles.primaryBtnDisabled,
             ]}
             disabled={!ready}
@@ -83,54 +87,10 @@ export default function Welcome() {
             </View>
           </Pressable>
 
-          {/* Optional secondary actions */}
-          <View style={styles.secondaryRow}>
-            <Pressable
-              style={({ pressed }) => [
-                styles.secondaryBtn,
-                pressed && { opacity: 0.85 },
-              ]}
-              onPress={() => router.push("/year")}
-              disabled={!ready}
-            >
-              <Text style={styles.secondaryBtnText}>Browse by year</Text>
-            </Pressable>
-
-            <Pressable
-              style={({ pressed }) => [
-                styles.secondaryBtn,
-                pressed && { opacity: 0.85 },
-              ]}
-              onPress={() => router.push("/chat")}
-              disabled={!ready}
-            >
-              <Text style={styles.secondaryBtnText}>Ask a question</Text>
-            </Pressable>
-          </View>
-        </View>
-
-        {/* Safety note */}
-        <View style={styles.safetyCard}>
-          <Text style={styles.safetyTitle}>Safety note</Text>
-          <Text style={styles.safetyBody}>
-            If there’s active leaking, soft floors/walls, or any electrical exposure: stop,
-            dry things out, and request help.
+          <Text style={styles.microHint}>
+            Tip: Include where it is (roof/window/floor), when it happens, and whether it’s dripping.
           </Text>
         </View>
-
-        {/* Temporary admin test button (optional) */}
-        {/* Uncomment while testing, remove for production */}
-        {/* 
-        <Pressable
-          onPress={() => router.push("/admin")}
-          style={({ pressed }) => [
-            styles.adminTestBtn,
-            pressed && { opacity: 0.9 },
-          ]}
-        >
-          <Text style={styles.adminTestText}>ADMIN (TEST)</Text>
-        </Pressable>
-        */}
       </View>
     </SafeAreaView>
   );
@@ -138,6 +98,26 @@ export default function Welcome() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#0B0F14" },
+
+  // soft glows
+  bgGlowTop: {
+    position: "absolute",
+    top: -140,
+    left: -90,
+    width: 340,
+    height: 340,
+    borderRadius: 999,
+    backgroundColor: "rgba(37,99,235,0.18)",
+  },
+  bgGlowBottom: {
+    position: "absolute",
+    bottom: -160,
+    right: -120,
+    width: 420,
+    height: 420,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.06)",
+  },
 
   container: {
     flex: 1,
@@ -196,38 +176,10 @@ const styles = StyleSheet.create({
   primaryBtnDisabled: { opacity: 0.45 },
   primaryBtnText: { color: "#0B0F14", fontWeight: "900", fontSize: 15 },
 
-  secondaryRow: { flexDirection: "row", gap: 10 },
-  secondaryBtn: {
-    flex: 1,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.08)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-    alignItems: "center",
-    justifyContent: "center",
+  microHint: {
+    marginTop: 2,
+    color: "rgba(255,255,255,0.45)",
+    fontSize: 11,
+    lineHeight: 15,
   },
-  secondaryBtnText: { color: "rgba(255,255,255,0.9)", fontWeight: "800", fontSize: 13 },
-
-  safetyCard: {
-    borderRadius: 18,
-    padding: 14,
-    backgroundColor: "rgba(239,68,68,0.12)",
-    borderWidth: 1,
-    borderColor: "rgba(239,68,68,0.22)",
-    gap: 6,
-  },
-  safetyTitle: { color: "white", fontWeight: "900" },
-  safetyBody: { color: "rgba(255,255,255,0.75)", fontSize: 12, lineHeight: 17 },
-
-  adminTestBtn: {
-    marginTop: 8,
-    borderRadius: 16,
-    paddingVertical: 14,
-    alignItems: "center",
-    backgroundColor: "rgba(239,68,68,0.18)",
-    borderWidth: 1,
-    borderColor: "rgba(239,68,68,0.30)",
-  },
-  adminTestText: { color: "white", fontWeight: "900", fontSize: 14 },
 });

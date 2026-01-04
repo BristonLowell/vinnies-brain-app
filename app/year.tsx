@@ -24,12 +24,14 @@ export default function Year() {
   }, []);
 
   async function next() {
-    if (!selected) return;
+  if (!selected) return;
 
-    const sid = await getOrCreateSession();
-    await setContext(sid, selected, undefined);
-    router.push({ pathname: "/category", params: { year: String(selected) } });
-  }
+  const sid = await getOrCreateSession();
+  await setContext(sid, selected, undefined); // year set, category left undefined
+
+  router.push({ pathname: "/chat", params: { year: String(selected) } });
+}
+
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>

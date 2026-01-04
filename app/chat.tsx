@@ -21,8 +21,10 @@ type ChatItem = {
   role: "user" | "assistant";
   text: string;
   meta?: {
+    // Removed sources from UI, but leaving optional in case you still want it in data
     usedArticles?: { id: string; title: string }[];
     showEscalation?: boolean;
+    clarifyingQuestion?: string; // NEW: show this bold at top of AI response
   };
 };
 
@@ -136,11 +138,14 @@ export default function Chat() {
 
       const res = await sendChat(sid, message, year);
 
+      // Keep parsing used_articles (harmless), but we will NOT render it.
       const usedArticles = Array.isArray(res.used_articles)
         ? res.used_articles.map((a: any) => ({ id: a.id, title: a.title }))
         : [];
 
       const cq = Array.isArray(res.clarifying_questions) ? res.clarifying_questions : [];
+      const clarifyingQuestion = cq?.[0] ? String(cq[0]) : "";
+
       setExpectsYesNo(cq.length > 0);
 
       setItems((prev) => [
@@ -151,6 +156,7 @@ export default function Chat() {
           meta: {
             usedArticles,
             showEscalation: !!res.show_escalation,
+            clarifyingQuestion, // NEW
           },
         },
       ]);
@@ -203,7 +209,7 @@ export default function Chat() {
           onContentSizeChange={() => scrollToBottom(false)}
           renderItem={({ item }) => {
             const isUser = item.role === "user";
-            const used = item.meta?.usedArticles || [];
+            const cq = item.meta?.clarifyingQuestion?.trim();
 
             return (
               <View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
@@ -214,16 +220,14 @@ export default function Chat() {
                 )}
 
                 <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
+                  {/* NEW: bold clarifying question at top of AI response */}
+                  {!isUser && !!cq && <Text style={styles.clarifyingQuestion}>{cq}</Text>}
+
                   <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>
                     {item.text}
                   </Text>
 
-                  {!isUser && used.length > 0 && (
-                    <View style={styles.sourcesWrap}>
-                      <Text style={styles.sourcesLabel}>Sources used</Text>
-                      <Text style={styles.sourcesText}>{used.map((u) => u.title).join(" • ")}</Text>
-                    </View>
-                  )}
+                  {/* REMOVED: Sources used section */}
                 </View>
               </View>
             );
@@ -265,10 +269,7 @@ export default function Chat() {
 
         {showEscalate && (
           <Pressable
-            style={({ pressed }) => [
-              styles.escalate,
-              pressed && { opacity: 0.9, transform: [{ scale: 0.99 }] },
-            ]}
+            style={({ pressed }) => [styles.escalate, pressed && { opacity: 0.9, transform: [{ scale: 0.99 }] }]}
             onPress={() => {
               if (isLiveChatHours()) {
                 router.push({ pathname: "/live-chat" });
@@ -363,21 +364,21 @@ const styles = StyleSheet.create({
   aiBubble: { backgroundColor: "#111827", borderColor: "rgba(255,255,255,0.10)" },
   userBubble: { backgroundColor: "#2563EB", borderColor: "rgba(255,255,255,0.10)" },
 
+  // NEW style for bold question at top
+  clarifyingQuestion: {
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: "900",
+    color: "rgba(255,255,255,0.95)",
+    marginBottom: 8,
+  },
+
   bubbleText: { fontSize: 15, lineHeight: 20 },
   aiText: { color: "rgba(255,255,255,0.92)" },
   userText: { color: "white", fontWeight: "600" },
 
   typingBubble: { flexDirection: "row", alignItems: "center", gap: 8 },
   typingText: { color: "rgba(255,255,255,0.75)", fontWeight: "700" },
-
-  sourcesWrap: {
-    marginTop: 10,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: "rgba(255,255,255,0.10)",
-  },
-  sourcesLabel: { fontSize: 11, fontWeight: "900", color: "rgba(255,255,255,0.65)" },
-  sourcesText: { marginTop: 2, fontSize: 12, color: "rgba(255,255,255,0.65)" },
 
   binaryRow: {
     flexDirection: "row",

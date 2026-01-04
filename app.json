@@ -16,7 +16,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.vinnies.vinniesbrain",
-      "buildNumber": "13",
+      "buildNumber": "14",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }

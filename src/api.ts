@@ -113,3 +113,38 @@ export async function createEscalation(payload: {
 }) {
   return await http<EscalationResponse>("/v1/escalations", payload);
 }
+
+export type LiveChatSendResponse = {
+  ok: boolean;
+  conversation_id: string;
+};
+
+export type LiveChatHistoryResponse = {
+  conversation_id: string;
+  messages: {
+    id: string;
+    conversation_id: string;
+    sender_role: "customer" | "owner" | "system";
+    body: string;
+    created_at: string;
+  }[];
+};
+
+export async function liveChatSend(sessionId: string, body: string) {
+  return await http<LiveChatSendResponse>("/v1/livechat/send", {
+    session_id: sessionId,
+    body,
+  });
+}
+
+export async function liveChatHistory(sessionId: string) {
+  return await http<LiveChatHistoryResponse>(`/v1/livechat/history/${sessionId}`);
+}
+
+export async function registerOwnerPushToken(ownerId: string, expoPushToken: string) {
+  return await http<{ ok: boolean }>("/v1/owner/push-token", {
+    owner_id: ownerId,
+    expo_push_token: expoPushToken,
+  });
+}
+

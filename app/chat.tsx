@@ -271,7 +271,7 @@ export default function Chat() {
             ]}
             onPress={() => {
               if (isLiveChatHours()) {
-                router.push("/live-chat");
+                router.push({ pathname: "/live-chat" });
               } else {
                 router.push({ pathname: "/escalate", params: { year: year ? String(year) : "" } });
               }

@@ -1,56 +1,65 @@
 import { useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
-import {
-  View,
-  Text,
-  Pressable,
-  StyleSheet,
-  ScrollView,
-  StatusBar,
-} from "react-native";
+import { View, Text, Pressable, StyleSheet, ScrollView, StatusBar, Alert } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { getOrCreateSession, setContext } from "../src/api";
 
 export default function Year() {
   const router = useRouter();
-  const years = useMemo(
-    () => Array.from({ length: 2025 - 2010 + 1 }, (_, i) => 2010 + i),
-    []
-  );
+
+  const years = useMemo(() => Array.from({ length: 2025 - 2010 + 1 }, (_, i) => 2010 + i), []);
   const [selected, setSelected] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    getOrCreateSession();
+    // don't block UI if this fails
+    getOrCreateSession().catch((e) => console.log("getOrCreateSession error:", e));
   }, []);
 
   async function next() {
-  if (!selected) return;
+    if (!selected || loading) return;
 
-  const sid = await getOrCreateSession();
-  await setContext(sid, selected, undefined); // year set, category left undefined
+    setLoading(true);
 
-  router.push({ pathname: "/chat", params: { year: String(selected) } });
-}
+    let sid = "";
+    try {
+      sid = await getOrCreateSession();
+    } catch (e) {
+      console.log("getOrCreateSession failed:", e);
+      // still navigate; chat can create session again
+    }
 
+    // IMPORTANT: never block navigation on setContext
+    if (sid) {
+      try {
+        await setContext(sid, selected, undefined); // year set, category undefined
+      } catch (e) {
+        console.log("setContext failed (non-fatal):", e);
+      }
+    }
+
+    // Navigate no matter what
+    try {
+      router.push({ pathname: "/chat", params: { year: String(selected) } });
+    } catch (e) {
+      console.log("router.push failed:", e);
+      Alert.alert("Navigation failed", "Could not open chat screen. Check that app/chat.tsx exists.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <StatusBar barStyle="light-content" />
 
       <View style={styles.container}>
-        {/* Header */}
         <View style={styles.header}>
           <Text style={styles.title}>What year is your Airstream?</Text>
-          <Text style={styles.subtitle}>
-            Select the model year so troubleshooting steps are accurate.
-          </Text>
+          <Text style={styles.subtitle}>Select the model year so troubleshooting steps are accurate.</Text>
         </View>
 
-        {/* Year grid */}
-        <ScrollView
-          contentContainerStyle={styles.grid}
-          showsVerticalScrollIndicator={false}
-        >
+        <ScrollView contentContainerStyle={styles.grid} showsVerticalScrollIndicator={false}>
           {years.map((y) => {
             const isSelected = selected === y;
             return (
@@ -63,31 +72,22 @@ export default function Year() {
                   pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] },
                 ]}
               >
-                <Text
-                  style={[
-                    styles.chipText,
-                    isSelected && styles.chipTextSelected,
-                  ]}
-                >
-                  {y}
-                </Text>
+                <Text style={[styles.chipText, isSelected && styles.chipTextSelected]}>{y}</Text>
               </Pressable>
             );
           })}
         </ScrollView>
 
-        {/* Continue */}
         <Pressable
-  onPress={next}
-  disabled={!selected}
-  style={({ pressed }) => [
-    styles.button,
-    !selected && styles.buttonDisabled,
-    pressed && !!selected && { opacity: 0.92, transform: [{ scale: 0.99 }] },
-  ]}
->
-
-          <Text style={styles.buttonText}>Continue</Text>
+          onPress={next}
+          disabled={!selected || loading}
+          style={({ pressed }) => [
+            styles.button,
+            (!selected || loading) && styles.buttonDisabled,
+            pressed && !!selected && !loading && { opacity: 0.92, transform: [{ scale: 0.99 }] },
+          ]}
+        >
+          <Text style={styles.buttonText}>{loading ? "Continuing…" : "Continue"}</Text>
         </Pressable>
       </View>
     </SafeAreaView>
@@ -97,27 +97,13 @@ export default function Year() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#0B0F14" },
 
-  container: {
-    flex: 1,
-    paddingHorizontal: 18,
-    paddingTop: 18,
-    paddingBottom: 18,
-  },
+  container: { flex: 1, paddingHorizontal: 18, paddingTop: 18, paddingBottom: 18 },
 
   header: { marginBottom: 14 },
   title: { color: "white", fontSize: 22, fontWeight: "900" },
-  subtitle: {
-    marginTop: 4,
-    color: "rgba(255,255,255,0.6)",
-    fontSize: 13,
-  },
+  subtitle: { marginTop: 4, color: "rgba(255,255,255,0.6)", fontSize: 13 },
 
-  grid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    paddingBottom: 20,
-  },
+  grid: { flexDirection: "row", flexWrap: "wrap", gap: 10, paddingBottom: 20 },
 
   chip: {
     width: "30%",
@@ -128,30 +114,11 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.10)",
     alignItems: "center",
   },
-  chipSelected: {
-    backgroundColor: "#2563EB",
-    borderColor: "rgba(255,255,255,0.15)",
-  },
-  chipText: {
-    color: "rgba(255,255,255,0.9)",
-    fontSize: 14,
-    fontWeight: "800",
-  },
-  chipTextSelected: {
-    color: "white",
-  },
+  chipSelected: { backgroundColor: "#2563EB", borderColor: "rgba(255,255,255,0.15)" },
+  chipText: { color: "rgba(255,255,255,0.9)", fontSize: 14, fontWeight: "800" },
+  chipTextSelected: { color: "white" },
 
-  button: {
-    height: 52,
-    borderRadius: 16,
-    backgroundColor: "white",
-    alignItems: "center",
-    justifyContent: "center",
-  },
+  button: { height: 52, borderRadius: 16, backgroundColor: "white", alignItems: "center", justifyContent: "center" },
   buttonDisabled: { opacity: 0.35 },
-  buttonText: {
-    color: "#0B0F14",
-    fontSize: 15,
-    fontWeight: "900",
-  },
+  buttonText: { color: "#0B0F14", fontSize: 15, fontWeight: "900" },
 });

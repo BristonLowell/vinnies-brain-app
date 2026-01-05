@@ -183,7 +183,8 @@ export default function Chat() {
   const canSend = text.trim().length > 0 && !sending;
 
   // Used for label/subtext (re-check also happens on press)
-  const liveChatAvailable = isLiveChatHours();
+  const liveChatAvailable = true;
+  // const liveChatAvailable = isLiveChatHours();
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
@@ -270,22 +271,20 @@ export default function Chat() {
         {showEscalate && (
           <Pressable
             style={({ pressed }) => [styles.escalate, pressed && { opacity: 0.9, transform: [{ scale: 0.99 }] }]}
+            // onPress={() => {
+            //   if (isLiveChatHours()) {
+            //     router.push({ pathname: "/live-chat" });
+            //   } else {
+            //     router.push({ pathname: "/escalate", params: { year: year ? String(year) : "" } });
+            //   }
+            // }}
             onPress={() => {
-              if (isLiveChatHours()) {
-                router.push({ pathname: "/live-chat" });
-              } else {
-                router.push({ pathname: "/escalate", params: { year: year ? String(year) : "" } });
-              }
-            }}
+  router.push({ pathname: "/live-chat" });
+}}
           >
-            <Text style={styles.escalateText}>
-              {liveChatAvailable ? "Chat with Vinnies now" : "Request help (email)"}
-            </Text>
-            <Text style={styles.escalateSub}>
-              {liveChatAvailable
-                ? "You’re chatting directly with the owner."
-                : "Share photos and details — we’ll follow up next business day."}
-            </Text>
+            <Text style={styles.escalateText}>Chat with Vinnies now</Text>
+<Text style={styles.escalateSub}>You’re chatting directly with the owner.</Text>
+
           </Pressable>
         )}
 

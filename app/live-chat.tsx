@@ -21,220 +21,221 @@ type Msg = {
   conversation_id?: string;
 };
 
-// export default function LiveChat() {
-//   const [conversationId, setConversationId] = useState<string>("");
-//   const [messages, setMessages] = useState<Msg[]>([]);
-//   const [text, setText] = useState("");
-//   const [ready, setReady] = useState(false);
-//   const [error, setError] = useState<string>("");
-
-//   const listRef = useRef<FlatList<Msg>>(null);
-
-//   const scrollToBottom = () => {
-//     InteractionManager.runAfterInteractions(() => {
-//       listRef.current?.scrollToEnd({ animated: true });
-//     });
-//   };
-
-//   useEffect(() => {
-//     let cancelled = false;
-
-//     (async () => {
-//       try {
-//         setError("");
-//         setReady(false);
-
-//         const user = await ensureAnon();
-//         if (!user?.id) {
-//           setError("Unable to start chat session.");
-//           return;
-//         }
-
-//         const existing = await supabase
-//           .from("conversations")
-//           .select("id,status")
-//           .eq("customer_id", user.id)
-//           .eq("status", "open")
-//           .order("created_at", { ascending: false })
-//           .limit(1)
-//           .maybeSingle();
-
-//         if (existing.error) {
-//           setError(existing.error.message ?? "Failed to load conversation.");
-//           return;
-//         }
-
-//         let cid = existing.data?.id as string | undefined;
-
-//         if (!cid) {
-//           const created = await supabase
-//             .from("conversations")
-//             .insert({ customer_id: user.id, status: "open" })
-//             .select("id")
-//             .single();
-
-//           if (created.error) {
-//             setError(created.error.message ?? "Failed to create conversation.");
-//             return;
-//           }
-
-//           cid = created.data.id as string;
-//         }
-
-//         if (cancelled) return;
-
-//         setConversationId(cid);
-
-//         const initial = await supabase
-//           .from("messages")
-//           .select("id,sender_role,body,created_at,conversation_id")
-//           .eq("conversation_id", cid)
-//           .order("created_at", { ascending: true });
-
-//         if (initial.error) {
-//           setError(initial.error.message ?? "Failed to load messages.");
-//           return;
-//         }
-
-//         if (cancelled) return;
-
-//         setMessages((initial.data ?? []) as Msg[]);
-//         setReady(true);
-//         scrollToBottom();
-//       } catch (e: any) {
-//         console.log("live chat init fatal:", e);
-//         if (!cancelled) setError(e?.message ? String(e.message) : "Live chat failed to load.");
-//       }
-//     })();
-
-//     return () => {
-//       cancelled = true;
-//     };
-//   }, []);
-
-//   useEffect(() => {
-//     if (!conversationId) return;
-
-//     const channel = supabase
-//       .channel(`messages:${conversationId}`)
-//       .on(
-//         "postgres_changes",
-//         {
-//           event: "INSERT",
-//           schema: "public",
-//           table: "messages",
-//           filter: `conversation_id=eq.${conversationId}`,
-//         },
-//         (payload) => {
-//           try {
-//             const m = payload.new as Msg;
-//             setMessages((prev) => [...prev, m]);
-//             scrollToBottom();
-//           } catch (e) {
-//             console.log("realtime handler error:", e);
-//           }
-//         }
-//       )
-//       .subscribe();
-
-//     return () => {
-//       supabase.removeChannel(channel);
-//     };
-//   }, [conversationId]);
-
-//   const canSend = useMemo(
-//     () => text.trim().length > 0 && ready && !!conversationId && !error,
-//     [text, ready, conversationId, error]
-//   );
-
-//   async function send() {
-//     try {
-//       const body = text.trim();
-//       if (!body || !conversationId) return;
-
-//       setText("");
-
-//       const { data: sess, error: sessErr } = await supabase.auth.getSession();
-//       if (sessErr) {
-//         console.log("getSession error:", sessErr);
-//         return;
-//       }
-
-//       const uid = sess.session?.user?.id;
-//       if (!uid) {
-//         console.log("No user id in session");
-//         return;
-//       }
-
-//       const ins = await supabase.from("messages").insert({
-//         conversation_id: conversationId,
-//         sender_id: uid,
-//         sender_role: "customer",
-//         body,
-//       });
-
-//       if (ins.error) console.log("send error:", ins.error);
-//     } catch (e) {
-//       console.log("send fatal:", e);
-//     }
-//   }
-
-//   return (
-//     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
-//       <KeyboardAvoidingView style={styles.safe} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-//         <View style={styles.header}>
-//           <Text style={styles.title}>Live chat with Vinnies</Text>
-//           <Text style={styles.sub}>You’re chatting directly with the owner.</Text>
-//         </View>
-
-//         {!!error && (
-//           <View style={styles.errorBox}>
-//             <Text style={styles.errorText}>{error}</Text>
-//           </View>
-//         )}
-
-//         <FlatList
-//           ref={listRef}
-//           data={messages}
-//           keyExtractor={(m) => m.id}
-//           contentContainerStyle={styles.list}
-//           renderItem={({ item }) => {
-//             const mine = item.sender_role === "customer";
-//             return (
-//               <View style={[styles.bubble, mine ? styles.mine : styles.theirs]}>
-//                 <Text style={styles.msgText}>{item.body}</Text>
-//               </View>
-//             );
-//           }}
-//         />
-
-//         <View style={styles.inputWrap}>
-//           <TextInput
-//             value={text}
-//             onChangeText={setText}
-//             placeholder="Type a message…"
-//             placeholderTextColor="rgba(255,255,255,0.45)"
-//             style={styles.input}
-//             multiline
-//             editable={ready && !error}
-//           />
-//           <Pressable style={[styles.btn, !canSend && styles.btnDisabled]} disabled={!canSend} onPress={send}>
-//             <Text style={styles.btnText}>Send</Text>
-//           </Pressable>
-//         </View>
-//       </KeyboardAvoidingView>
-//     </SafeAreaView>
-//   );
-// }
-
 export default function LiveChat() {
+  const [conversationId, setConversationId] = useState<string>("");
+  const [messages, setMessages] = useState<Msg[]>([]);
+  const [text, setText] = useState("");
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState<string>("");
+
+  const listRef = useRef<FlatList<Msg>>(null);
+
+  const scrollToBottom = () => {
+    InteractionManager.runAfterInteractions(() => {
+      listRef.current?.scrollToEnd({ animated: true });
+    });
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        setError("");
+        setReady(false);
+
+        const user = await ensureAnon();
+        if (!user?.id) {
+          setError("Unable to start chat session.");
+          return;
+        }
+
+        const existing = await supabase
+          .from("conversations")
+          .select("id,status")
+          .eq("customer_id", user.id)
+          .eq("status", "open")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (existing.error) {
+          setError(existing.error.message ?? "Failed to load conversation.");
+          return;
+        }
+
+        let cid = existing.data?.id as string | undefined;
+
+        if (!cid) {
+          const created = await supabase
+            .from("conversations")
+            .insert({ customer_id: user.id, status: "open" })
+            .select("id")
+            .single();
+
+          if (created.error) {
+            setError(created.error.message ?? "Failed to create conversation.");
+            return;
+          }
+
+          cid = created.data.id as string;
+        }
+
+        if (cancelled) return;
+
+        setConversationId(cid);
+
+        const initial = await supabase
+          .from("messages")
+          .select("id,sender_role,body,created_at,conversation_id")
+          .eq("conversation_id", cid)
+          .order("created_at", { ascending: true });
+
+        if (initial.error) {
+          setError(initial.error.message ?? "Failed to load messages.");
+          return;
+        }
+
+        if (cancelled) return;
+
+        setMessages((initial.data ?? []) as Msg[]);
+        setReady(true);
+        scrollToBottom();
+      } catch (e: any) {
+        console.log("live chat init fatal:", e);
+        if (!cancelled) setError(e?.message ? String(e.message) : "Live chat failed to load.");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+  if (!conversationId) return;
+
+  let channel: any;
+  let cancelled = false;
+
+  // Delay realtime to avoid Hermes crash
+  const timer = setTimeout(() => {
+    if (cancelled) return;
+
+    channel = supabase
+      .channel(`messages:${conversationId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+          filter: `conversation_id=eq.${conversationId}`,
+        },
+        (payload) => {
+          try {
+            const m = payload.new as Msg;
+            setMessages((prev) => [...prev, m]);
+          } catch (e) {
+            console.log("realtime handler error:", e);
+          }
+        }
+      )
+      .subscribe();
+  }, 1200); // ⬅️ THIS DELAY MATTERS
+
+  return () => {
+    cancelled = true;
+    clearTimeout(timer);
+    if (channel) supabase.removeChannel(channel);
+  };
+}, [conversationId]);
+
+
+  const canSend = useMemo(
+    () => text.trim().length > 0 && ready && !!conversationId && !error,
+    [text, ready, conversationId, error]
+  );
+
+  async function send() {
+    try {
+      const body = text.trim();
+      if (!body || !conversationId) return;
+
+      setText("");
+
+      const { data: sess, error: sessErr } = await supabase.auth.getSession();
+      if (sessErr) {
+        console.log("getSession error:", sessErr);
+        return;
+      }
+
+      const uid = sess.session?.user?.id;
+      if (!uid) {
+        console.log("No user id in session");
+        return;
+      }
+
+      const ins = await supabase.from("messages").insert({
+        conversation_id: conversationId,
+        sender_id: uid,
+        sender_role: "customer",
+        body,
+      });
+
+      if (ins.error) console.log("send error:", ins.error);
+    } catch (e) {
+      console.log("send fatal:", e);
+    }
+  }
+
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#0B0F14", justifyContent: "center", alignItems: "center" }}>
-      <Text style={{ color: "white" }}>Live chat screen loaded</Text>
+    <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
+      <KeyboardAvoidingView style={styles.safe} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <View style={styles.header}>
+          <Text style={styles.title}>Live chat with Vinnies</Text>
+          <Text style={styles.sub}>You’re chatting directly with the owner.</Text>
+        </View>
+
+        {!!error && (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        )}
+
+        <FlatList
+          ref={listRef}
+          data={messages}
+          keyExtractor={(m) => m.id}
+          contentContainerStyle={styles.list}
+          renderItem={({ item }) => {
+            const mine = item.sender_role === "customer";
+            return (
+              <View style={[styles.bubble, mine ? styles.mine : styles.theirs]}>
+                <Text style={styles.msgText}>{item.body}</Text>
+              </View>
+            );
+          }}
+        />
+
+        <View style={styles.inputWrap}>
+          <TextInput
+            value={text}
+            onChangeText={setText}
+            placeholder="Type a message…"
+            placeholderTextColor="rgba(255,255,255,0.45)"
+            style={styles.input}
+            multiline
+            editable={ready && !error}
+          />
+          <Pressable style={[styles.btn, !canSend && styles.btnDisabled]} disabled={!canSend} onPress={send}>
+            <Text style={styles.btnText}>Send</Text>
+          </Pressable>
+        </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
-
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#0B0F14" },

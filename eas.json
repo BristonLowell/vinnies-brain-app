@@ -4,6 +4,10 @@
   },
   "build": {
     "production": {
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://yyltimkksumstwkwpxsj.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl5bHRpbWtrc3Vtc3R3a3dweHNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjcxMDY0MTcsImV4cCI6MjA4MjY4MjQxN30.5-TYKX46R_ceBx83z8TpS1xeH4woOphoGJvMFFGqt28"
+      },
       "ios": {
         "distribution": "store"
       }

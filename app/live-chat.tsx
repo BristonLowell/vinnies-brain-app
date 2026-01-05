@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -9,32 +9,67 @@ import {
   KeyboardAvoidingView,
   Platform,
   InteractionManager,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { supabase, ensureAnon } from "../src/supabase";
+import { getOrCreateSession, liveChatHistory, liveChatSend } from "../src/api";
 
 type Msg = {
   id: string;
-  sender_role: "customer" | "owner";
+  sender_role: "customer" | "owner" | "system";
   body: string;
   created_at: string;
   conversation_id?: string;
 };
 
 export default function LiveChat() {
+  const [sessionId, setSessionId] = useState<string>("");
   const [conversationId, setConversationId] = useState<string>("");
   const [messages, setMessages] = useState<Msg[]>([]);
   const [text, setText] = useState("");
   const [ready, setReady] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>("");
 
   const listRef = useRef<FlatList<Msg>>(null);
+  const pollTimerRef = useRef<any>(null);
+  const lastSigRef = useRef<string>("");
 
-  const scrollToBottom = () => {
+  const scrollToBottom = useCallback(() => {
     InteractionManager.runAfterInteractions(() => {
       listRef.current?.scrollToEnd({ animated: true });
     });
+  }, []);
+
+  const computeSig = (msgs: Msg[]) => {
+    // simple signature to avoid re-setting state when nothing changed
+    const last = msgs?.[msgs.length - 1];
+    return `${msgs.length}:${last?.id ?? ""}:${last?.created_at ?? ""}`;
   };
+
+  const refresh = useCallback(
+    async (sid: string) => {
+      try {
+        const hist = await liveChatHistory(sid);
+
+        const cid = String(hist.conversation_id || "");
+        const msgs = Array.isArray(hist.messages) ? (hist.messages as Msg[]) : [];
+
+        const sig = computeSig(msgs);
+        if (sig !== lastSigRef.current) {
+          lastSigRef.current = sig;
+          setConversationId(cid);
+          setMessages(msgs);
+          requestAnimationFrame(scrollToBottom);
+        }
+      } catch (e: any) {
+        // Don’t spam the UI on transient errors; show something useful though
+        const msg = String(e?.message ?? "Failed to load live chat.");
+        setError(msg);
+      }
+    },
+    [scrollToBottom]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -43,149 +78,62 @@ export default function LiveChat() {
       try {
         setError("");
         setReady(false);
+        setLoading(true);
 
-        const user = await ensureAnon();
-        if (!user?.id) {
-          setError("Unable to start chat session.");
-          return;
-        }
+        const sid = await getOrCreateSession(); // reuse existing session (no login needed)
+        if (cancelled) return;
 
-        const existing = await supabase
-          .from("conversations")
-          .select("id,status")
-          .eq("customer_id", user.id)
-          .eq("status", "open")
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
+        setSessionId(sid);
 
-        if (existing.error) {
-          setError(existing.error.message ?? "Failed to load conversation.");
-          return;
-        }
-
-        let cid = existing.data?.id as string | undefined;
-
-        if (!cid) {
-          const created = await supabase
-            .from("conversations")
-            .insert({ customer_id: user.id, status: "open" })
-            .select("id")
-            .single();
-
-          if (created.error) {
-            setError(created.error.message ?? "Failed to create conversation.");
-            return;
-          }
-
-          cid = created.data.id as string;
-        }
+        await refresh(sid);
 
         if (cancelled) return;
 
-        setConversationId(cid);
-
-        const initial = await supabase
-          .from("messages")
-          .select("id,sender_role,body,created_at,conversation_id")
-          .eq("conversation_id", cid)
-          .order("created_at", { ascending: true });
-
-        if (initial.error) {
-          setError(initial.error.message ?? "Failed to load messages.");
-          return;
-        }
-
-        if (cancelled) return;
-
-        setMessages((initial.data ?? []) as Msg[]);
         setReady(true);
-        scrollToBottom();
       } catch (e: any) {
-        console.log("live chat init fatal:", e);
-        if (!cancelled) setError(e?.message ? String(e.message) : "Live chat failed to load.");
+        if (!cancelled) setError(String(e?.message ?? "Unable to start live chat."));
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refresh]);
 
+  // Poll every 2s for new messages (no Supabase auth / realtime needed)
   useEffect(() => {
-  if (!conversationId) return;
+    if (!sessionId) return;
 
-  let channel: any;
-  let cancelled = false;
+    if (pollTimerRef.current) clearInterval(pollTimerRef.current);
 
-  // Delay realtime to avoid Hermes crash
-  const timer = setTimeout(() => {
-    if (cancelled) return;
+    pollTimerRef.current = setInterval(() => {
+      refresh(sessionId);
+    }, 2000);
 
-    channel = supabase
-      .channel(`messages:${conversationId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-          filter: `conversation_id=eq.${conversationId}`,
-        },
-        (payload) => {
-          try {
-            const m = payload.new as Msg;
-            setMessages((prev) => [...prev, m]);
-          } catch (e) {
-            console.log("realtime handler error:", e);
-          }
-        }
-      )
-      .subscribe();
-  }, 1200); // ⬅️ THIS DELAY MATTERS
+    return () => {
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    };
+  }, [sessionId, refresh]);
 
-  return () => {
-    cancelled = true;
-    clearTimeout(timer);
-    if (channel) supabase.removeChannel(channel);
-  };
-}, [conversationId]);
-
-
-  const canSend = useMemo(
-    () => text.trim().length > 0 && ready && !!conversationId && !error,
-    [text, ready, conversationId, error]
-  );
+  const canSend = useMemo(() => {
+    return text.trim().length > 0 && ready && !!sessionId && !loading;
+  }, [text, ready, sessionId, loading]);
 
   async function send() {
     try {
       const body = text.trim();
-      if (!body || !conversationId) return;
+      if (!body || !sessionId) return;
 
       setText("");
+      setError("");
 
-      const { data: sess, error: sessErr } = await supabase.auth.getSession();
-      if (sessErr) {
-        console.log("getSession error:", sessErr);
-        return;
-      }
-
-      const uid = sess.session?.user?.id;
-      if (!uid) {
-        console.log("No user id in session");
-        return;
-      }
-
-      const ins = await supabase.from("messages").insert({
-        conversation_id: conversationId,
-        sender_id: uid,
-        sender_role: "customer",
-        body,
-      });
-
-      if (ins.error) console.log("send error:", ins.error);
-    } catch (e) {
-      console.log("send fatal:", e);
+      await liveChatSend(sessionId, body);
+      await refresh(sessionId);
+    } catch (e: any) {
+      setError(String(e?.message ?? "Failed to send message."));
     }
   }
 
@@ -195,6 +143,7 @@ export default function LiveChat() {
         <View style={styles.header}>
           <Text style={styles.title}>Live chat with Vinnies</Text>
           <Text style={styles.sub}>You’re chatting directly with the owner.</Text>
+          {!!conversationId && <Text style={styles.meta}>Conversation: {conversationId.slice(0, 8)}…</Text>}
         </View>
 
         {!!error && (
@@ -203,20 +152,28 @@ export default function LiveChat() {
           </View>
         )}
 
-        <FlatList
-          ref={listRef}
-          data={messages}
-          keyExtractor={(m) => m.id}
-          contentContainerStyle={styles.list}
-          renderItem={({ item }) => {
-            const mine = item.sender_role === "customer";
-            return (
-              <View style={[styles.bubble, mine ? styles.mine : styles.theirs]}>
-                <Text style={styles.msgText}>{item.body}</Text>
-              </View>
-            );
-          }}
-        />
+        {loading && messages.length === 0 ? (
+          <View style={styles.loadingWrap}>
+            <ActivityIndicator />
+            <Text style={styles.loadingText}>Loading chat…</Text>
+          </View>
+        ) : (
+          <FlatList
+            ref={listRef}
+            data={messages}
+            keyExtractor={(m) => m.id}
+            contentContainerStyle={styles.list}
+            onContentSizeChange={() => scrollToBottom()}
+            renderItem={({ item }) => {
+              const mine = item.sender_role === "customer";
+              return (
+                <View style={[styles.bubble, mine ? styles.mine : styles.theirs]}>
+                  <Text style={styles.msgText}>{item.body}</Text>
+                </View>
+              );
+            }}
+          />
+        )}
 
         <View style={styles.inputWrap}>
           <TextInput
@@ -226,7 +183,7 @@ export default function LiveChat() {
             placeholderTextColor="rgba(255,255,255,0.45)"
             style={styles.input}
             multiline
-            editable={ready && !error}
+            editable={ready && !loading}
           />
           <Pressable style={[styles.btn, !canSend && styles.btnDisabled]} disabled={!canSend} onPress={send}>
             <Text style={styles.btnText}>Send</Text>
@@ -242,6 +199,10 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 8 },
   title: { color: "white", fontSize: 18, fontWeight: "900" },
   sub: { marginTop: 2, color: "rgba(255,255,255,0.65)" },
+  meta: { marginTop: 6, color: "rgba(255,255,255,0.45)", fontSize: 12, fontWeight: "700" },
+
+  loadingWrap: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10 },
+  loadingText: { color: "rgba(255,255,255,0.75)", fontWeight: "800" },
 
   errorBox: {
     marginHorizontal: 14,
@@ -284,7 +245,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.10)",
   },
-  btn: { height: 44, paddingHorizontal: 16, borderRadius: 14, backgroundColor: "white", alignItems: "center", justifyContent: "center" },
+  btn: {
+    height: 44,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: "white",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   btnDisabled: { opacity: 0.4 },
   btnText: { color: "#0B0F14", fontWeight: "900" },
 });

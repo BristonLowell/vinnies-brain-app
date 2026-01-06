@@ -3,117 +3,97 @@ import { API_BASE_URL } from "./config";
 import type { CreateSessionResponse, ChatResponse, EscalationResponse } from "./types";
 
 const SESSION_KEY = "vinniesbrain_session_id";
+const ADMIN_KEY = "vinniesbrain_admin_key";
 
-async function http<T>(path: string, body?: any): Promise<T> {
+async function http<T>(
+  path: string,
+  opts?: { body?: any; headers?: Record<string, string>; method?: string }
+): Promise<T> {
   const url = `${API_BASE_URL}${path}`;
+  const method = opts?.method ?? (opts?.body ? "POST" : "GET");
 
   const res = await fetch(url, {
-    method: body ? "POST" : "GET",
+    method,
     headers: {
       "Content-Type": "application/json",
+      ...(opts?.headers ?? {}),
     },
-    body: body ? JSON.stringify(body) : undefined,
+    body: opts?.body ? JSON.stringify(opts.body) : undefined,
   });
 
-  const text = await res.text(); // read raw body for debugging
-
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${text || res.statusText}`);
+    const txt = await res.text();
+    throw new Error(`HTTP ${res.status}: ${txt}`);
   }
-
-  return text ? (JSON.parse(text) as T) : ({} as T);
+  return (await res.json()) as T;
 }
 
-/**
- * Gets an existing session if valid, otherwise creates a new one.
- *
- * Option B support:
- * - forceNew: always create a new session and overwrite stored session id
- * - resetOld: when forceNew is true, also ask backend to reset old session (if supported)
- */
-export async function getOrCreateSession(opts?: {
-  forceNew?: boolean;
-  resetOld?: boolean; // requires backend support (optional)
-}): Promise<string> {
+// ----------------------------
+// Sessions
+// ----------------------------
+export async function getOrCreateSession(opts?: { resetOld?: boolean; deleteOldMessages?: boolean }) {
   const existing = await AsyncStorage.getItem(SESSION_KEY);
 
-  // ----------------------------
-  // OPTION B: Force a fresh session
-  // ----------------------------
-  if (opts?.forceNew) {
+  // Optional: rotate session
+  if (opts?.resetOld) {
     const data = await http<CreateSessionResponse>("/v1/sessions", {
-      channel: "mobile",
-      mode: "customer",
-
-      // Only send these if you implemented the backend reset behavior.
-      // If your backend doesn't accept these fields yet, leave resetOld=false.
-      ...(opts.resetOld && existing
-        ? { reset_old_session_id: existing, delete_old_messages: true }
-        : {}),
+      body: {
+        channel: "mobile",
+        mode: "customer",
+        ...(existing ? { reset_old_session_id: existing } : {}),
+        delete_old_messages: opts.deleteOldMessages ?? true,
+      },
     });
-
     await AsyncStorage.setItem(SESSION_KEY, data.session_id);
     return data.session_id;
   }
 
-  // ----------------------------
-  // Normal behavior: reuse saved session if still valid
-  // ----------------------------
+  // Normal: reuse if valid
   if (existing) {
     try {
       await http<{ ok: boolean }>(`/v1/sessions/${existing}`);
       return existing;
-    } catch (e: any) {
-      const msg = String(e?.message ?? "");
-
-      // If backend says session not found (404), clear it so we can create a fresh one
-      if (msg.includes("HTTP 404") || msg.toLowerCase().includes("session not found")) {
-        await AsyncStorage.removeItem(SESSION_KEY);
-      } else {
-        // For other errors (network, temporary backend error), keep existing so app can retry
-        return existing;
-      }
+    } catch {
+      // fall through to create
     }
   }
 
-  // Create a new session
-  const data = await http<CreateSessionResponse>("/v1/sessions", {
-    channel: "mobile",
-    mode: "customer",
+  const created = await http<CreateSessionResponse>("/v1/sessions", {
+    body: { channel: "mobile", mode: "customer" },
   });
-
-  await AsyncStorage.setItem(SESSION_KEY, data.session_id);
-  return data.session_id;
+  await AsyncStorage.setItem(SESSION_KEY, created.session_id);
+  return created.session_id;
 }
 
-export async function setContext(sessionId: string, airstreamYear?: number, category?: string) {
-  await http<{ ok: boolean }>(`/v1/sessions/${sessionId}/context`, {
-    airstream_year: airstreamYear ?? null,
-    category: category ?? null,
-  });
+export async function setContext(sessionId: string, ctx: { airstream_year?: number; category?: string }) {
+  return await http<{ ok: boolean }>(`/v1/sessions/${sessionId}/context`, { body: ctx });
 }
 
-export async function sendChat(sessionId: string, message: string, airstreamYear?: number) {
+export async function sendChat(params: { sessionId: string; message: string; airstreamYear?: number }) {
   return await http<ChatResponse>("/v1/chat", {
-    session_id: sessionId,
-    message,
-    airstream_year: airstreamYear ?? null,
+    body: {
+      session_id: params.sessionId,
+      message: params.message,
+      airstream_year: params.airstreamYear,
+    },
   });
 }
 
 export async function createEscalation(payload: {
   session_id: string;
-  airstream_year?: number;
-  issue_summary: string;
-  location?: string;
-  trigger?: string;
-  name?: string;
-  contact?: string;
+  name: string;
+  phone: string;
+  email: string;
+  message: string;
   preferred_contact?: string;
+  reset_old?: boolean;
 }) {
-  return await http<EscalationResponse>("/v1/escalations", payload);
+  return await http<EscalationResponse>("/v1/escalations", { body: payload });
 }
 
+// ----------------------------
+// Live chat (customer)
+// ----------------------------
 export type LiveChatSendResponse = {
   ok: boolean;
   conversation_id: string;
@@ -124,6 +104,7 @@ export type LiveChatHistoryResponse = {
   messages: {
     id: string;
     conversation_id: string;
+    sender_id: string;
     sender_role: "customer" | "owner" | "system";
     body: string;
     created_at: string;
@@ -132,8 +113,7 @@ export type LiveChatHistoryResponse = {
 
 export async function liveChatSend(sessionId: string, body: string) {
   return await http<LiveChatSendResponse>("/v1/livechat/send", {
-    session_id: sessionId,
-    body,
+    body: { session_id: sessionId, body },
   });
 }
 
@@ -143,8 +123,57 @@ export async function liveChatHistory(sessionId: string) {
 
 export async function registerOwnerPushToken(ownerId: string, expoPushToken: string) {
   return await http<{ ok: boolean }>("/v1/owner/push-token", {
-    owner_id: ownerId,
-    expo_push_token: expoPushToken,
+    body: { owner_id: ownerId, expo_push_token: expoPushToken },
   });
 }
 
+// ----------------------------
+// Admin key helpers
+// ----------------------------
+export async function getSavedAdminKey() {
+  return (await AsyncStorage.getItem(ADMIN_KEY)) || "";
+}
+
+export async function saveAdminKey(key: string) {
+  await AsyncStorage.setItem(ADMIN_KEY, key);
+}
+
+export async function clearAdminKey() {
+  await AsyncStorage.removeItem(ADMIN_KEY);
+}
+
+// ----------------------------
+// Live chat (admin)
+// ----------------------------
+export type AdminConversationItem = {
+  conversation_id: string;
+  customer_id: string; // currently equals session_id in your schema
+  last_message?: {
+    sender_role: "customer" | "owner" | "system";
+    body: string;
+    created_at: string;
+  };
+};
+
+export type AdminConversationsResponse = {
+  conversations: AdminConversationItem[];
+};
+
+export async function adminLiveChatConversations(adminKey: string) {
+  return await http<AdminConversationsResponse>("/v1/admin/livechat/conversations", {
+    headers: { "X-Admin-Key": adminKey },
+  });
+}
+
+export async function adminLiveChatHistory(adminKey: string, conversationId: string) {
+  return await http<LiveChatHistoryResponse>(`/v1/admin/livechat/history/${conversationId}`, {
+    headers: { "X-Admin-Key": adminKey },
+  });
+}
+
+export async function adminLiveChatSend(adminKey: string, conversationId: string, body: string) {
+  return await http<{ ok: boolean; conversation_id: string }>("/v1/admin/livechat/send", {
+    headers: { "X-Admin-Key": adminKey },
+    body: { conversation_id: conversationId, body },
+  });
+}

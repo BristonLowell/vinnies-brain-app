@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useRouter } from "expo-router";
 import {
   View,
   Text,
@@ -19,6 +21,7 @@ function normalizeLines(items: string[]) {
 }
 
 export default function Admin() {
+  const router = useRouter();
   const [adminKey, setAdminKey] = useState("");
 
   // Article basics
@@ -110,6 +113,13 @@ export default function Admin() {
     return tree;
   }
 
+  async function openLiveChatInbox() {
+    const key = adminKey.trim();
+    if (!key) return Alert.alert("Missing admin key", "Enter your ADMIN_API_KEY first.");
+    await AsyncStorage.setItem("vinniesbrain_admin_key", key);
+    router.push("/admin-inbox");
+  }
+
   async function save() {
     if (!adminKey.trim())
       return Alert.alert("Missing admin key", "Enter your ADMIN_API_KEY.");
@@ -190,6 +200,18 @@ export default function Admin() {
             placeholderTextColor="rgba(255,255,255,0.35)"
             autoCapitalize="none"
           />
+
+          <Pressable
+            onPress={openLiveChatInbox}
+            disabled={!adminKey.trim()}
+            style={({ pressed }) => [
+              styles.smallBtn,
+              !adminKey.trim() && styles.smallBtnDisabled,
+              pressed && adminKey.trim() && { opacity: 0.92 },
+            ]}
+          >
+            <Text style={styles.smallBtnText}>Open Live Chat Inbox</Text>
+          </Pressable>
         </View>
 
         {/* Basics */}

@@ -8,9 +8,15 @@ import {
   FlatList,
   ActivityIndicator,
   RefreshControl,
+  Alert,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
+import * as Notifications from "expo-notifications";
+import Constants from "expo-constants";
+import * as Device from "expo-device";
+
 import {
   adminLiveChatConversations,
   clearAdminKey,
@@ -18,12 +24,77 @@ import {
   saveAdminKey,
   type AdminConversationItem,
 } from "../src/api";
+import { API_BASE_URL } from "../src/config";
+
+// ✅ OPTION A: put your Supabase user UUID here (same value as Render env OWNER_SUPABASE_USER_ID)
+const OWNER_ID = "PASTE_YOUR_SUPABASE_USER_UUID_HERE";
 
 function fmt(ts?: string) {
   if (!ts) return "";
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return ts;
   return d.toLocaleString();
+}
+
+// Recommended by Expo so notifications show while app open (optional)
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldPlaySound: false,
+    shouldSetBadge: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+});
+
+async function registerForPushAndSendToBackend(ownerId: string) {
+  if (!ownerId || ownerId.includes("PASTE_YOUR")) {
+    // Don’t crash; just skip until you paste it in
+    return;
+  }
+
+  if (!Device.isDevice) {
+    // Push tokens don’t work on simulators
+    return;
+  }
+
+  // Ask permission
+  const existing = await Notifications.getPermissionsAsync();
+  let status = existing.status;
+
+  if (status !== "granted") {
+    const req = await Notifications.requestPermissionsAsync();
+    status = req.status;
+  }
+
+  if (status !== "granted") return;
+
+  // Needed on Android
+  if (Platform.OS === "android") {
+    await Notifications.setNotificationChannelAsync("default", {
+      name: "default",
+      importance: Notifications.AndroidImportance.DEFAULT,
+    });
+  }
+
+  // Get Expo push token
+  const projectId =
+    // modern
+    (Constants.expoConfig as any)?.extra?.eas?.projectId ||
+    // fallback
+    (Constants as any)?.easConfig?.projectId;
+
+  const tokenResp = await Notifications.getExpoPushTokenAsync(
+    projectId ? { projectId } : undefined
+  );
+
+  const expoPushToken = tokenResp.data;
+
+  // Send to backend
+  await fetch(`${API_BASE_URL}/v1/owner/push-token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ owner_id: ownerId, expo_push_token: expoPushToken }),
+  });
 }
 
 export default function AdminInbox() {
@@ -37,6 +108,7 @@ export default function AdminInbox() {
   const [items, setItems] = useState<AdminConversationItem[]>([]);
 
   const mounted = useRef(true);
+  const pushRegisteredRef = useRef(false);
 
   const hasKey = useMemo(() => adminKey.trim().length > 0, [adminKey]);
 
@@ -82,6 +154,22 @@ export default function AdminInbox() {
     load(false);
   }, [hasKey, load]);
 
+  // ✅ Register push token after admin key exists (once per app launch; backend upserts)
+  useEffect(() => {
+    if (!hasKey) return;
+    if (pushRegisteredRef.current) return;
+
+    pushRegisteredRef.current = true;
+
+    (async () => {
+      try {
+        await registerForPushAndSendToBackend(OWNER_ID);
+      } catch (e) {
+        // don't block inbox if push fails
+      }
+    })();
+  }, [hasKey]);
+
   async function applyKey() {
     const k = keyDraft.trim();
     if (!k) return;
@@ -95,6 +183,7 @@ export default function AdminInbox() {
     setKeyDraft("");
     setItems([]);
     setError("");
+    pushRegisteredRef.current = false;
   }
 
   const renderItem = ({ item }: { item: AdminConversationItem }) => {
@@ -249,9 +338,9 @@ const styles = StyleSheet.create({
     height: 44,
     paddingHorizontal: 14,
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.10)",
+    backgroundColor: "rgba(255,255,255,0.08)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    borderColor: "rgba(255,255,255,0.10)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -259,36 +348,38 @@ const styles = StyleSheet.create({
 
   errorBox: {
     marginHorizontal: 16,
-    marginBottom: 8,
+    marginBottom: 10,
     padding: 10,
-    borderRadius: 12,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: "rgba(239,68,68,0.35)",
     backgroundColor: "rgba(239,68,68,0.12)",
   },
-  errorText: { color: "white", fontWeight: "800" },
+  errorText: { color: "white", fontWeight: "900" },
 
   loading: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10 },
   loadingText: { color: "rgba(255,255,255,0.75)", fontWeight: "800" },
 
-  list: { paddingHorizontal: 16, paddingBottom: 16, gap: 10 },
+  list: { paddingHorizontal: 16, paddingBottom: 20 },
 
   row: {
-    flexDirection: "row",
-    gap: 10,
-    padding: 12,
-    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    borderRadius: 18,
     backgroundColor: "rgba(255,255,255,0.06)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.10)",
+    flexDirection: "row",
     alignItems: "center",
+    gap: 10,
+    marginBottom: 10,
   },
   rowTitle: { color: "white", fontWeight: "900" },
-  rowSub: { color: "rgba(255,255,255,0.75)", fontSize: 12, lineHeight: 16 },
+  rowSub: { color: "rgba(255,255,255,0.70)", lineHeight: 18 },
   rowMeta: { color: "rgba(255,255,255,0.45)", fontSize: 12, fontWeight: "700" },
-  chev: { color: "rgba(255,255,255,0.55)", fontSize: 24, paddingHorizontal: 6 },
+  chev: { color: "rgba(255,255,255,0.55)", fontSize: 26, fontWeight: "900" },
 
-  empty: { paddingVertical: 24, gap: 6, alignItems: "center" },
-  emptyTitle: { color: "white", fontWeight: "900" },
-  emptySub: { color: "rgba(255,255,255,0.6)", textAlign: "center", paddingHorizontal: 30 },
+  empty: { padding: 24, alignItems: "center", gap: 8 },
+  emptyTitle: { color: "white", fontWeight: "900", fontSize: 16 },
+  emptySub: { color: "rgba(255,255,255,0.65)", textAlign: "center" },
 });

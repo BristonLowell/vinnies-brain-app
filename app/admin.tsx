@@ -1,385 +1,365 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
   TextInput,
   Pressable,
   StyleSheet,
-  FlatList,
-  ActivityIndicator,
-  RefreshControl,
+  ScrollView,
   Alert,
   Platform,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import * as Notifications from "expo-notifications";
-import Constants from "expo-constants";
-import * as Device from "expo-device";
-
-import {
-  adminLiveChatConversations,
-  clearAdminKey,
-  getSavedAdminKey,
-  saveAdminKey,
-  type AdminConversationItem,
-} from "../src/api";
 import { API_BASE_URL } from "../src/config";
 
-// ✅ OPTION A: put your Supabase user UUID here (same value as Render env OWNER_SUPABASE_USER_ID)
-const OWNER_ID = "PASTE_YOUR_SUPABASE_USER_UUID_HERE";
+const ADMIN_KEY_STORAGE = "vinnies_admin_key";
 
-function fmt(ts?: string) {
-  if (!ts) return "";
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return ts;
-  return d.toLocaleString();
+function linesToArray(s: string) {
+  return (s || "")
+    .split("\n")
+    .map((x) => x.trim())
+    .filter(Boolean);
 }
 
-// Recommended by Expo so notifications show while app open (optional)
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldPlaySound: false,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
-
-async function registerForPushAndSendToBackend(ownerId: string) {
-  if (!ownerId || ownerId.includes("PASTE_YOUR")) {
-    // Don’t crash; just skip until you paste it in
-    return;
-  }
-
-  if (!Device.isDevice) {
-    // Push tokens don’t work on simulators
-    return;
-  }
-
-  // Ask permission
-  const existing = await Notifications.getPermissionsAsync();
-  let status = existing.status;
-
-  if (status !== "granted") {
-    const req = await Notifications.requestPermissionsAsync();
-    status = req.status;
-  }
-
-  if (status !== "granted") return;
-
-  // Needed on Android
-  if (Platform.OS === "android") {
-    await Notifications.setNotificationChannelAsync("default", {
-      name: "default",
-      importance: Notifications.AndroidImportance.DEFAULT,
-    });
-  }
-
-  // Get Expo push token
-  const projectId =
-    // modern
-    (Constants.expoConfig as any)?.extra?.eas?.projectId ||
-    // fallback
-    (Constants as any)?.easConfig?.projectId;
-
-  const tokenResp = await Notifications.getExpoPushTokenAsync(
-    projectId ? { projectId } : undefined
-  );
-
-  const expoPushToken = tokenResp.data;
-
-  // Send to backend
-  await fetch(`${API_BASE_URL}/v1/owner/push-token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ owner_id: ownerId, expo_push_token: expoPushToken }),
-  });
+function safeJsonParse(s: string) {
+  const t = (s || "").trim();
+  if (!t) return null;
+  return JSON.parse(t);
 }
 
-export default function AdminInbox() {
+export default function Admin() {
   const router = useRouter();
 
-  const [adminKey, setAdminKeyState] = useState("");
-  const [keyDraft, setKeyDraft] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState("");
-  const [items, setItems] = useState<AdminConversationItem[]>([]);
+  const [adminKey, setAdminKey] = useState("");
 
-  const mounted = useRef(true);
-  const pushRegisteredRef = useRef(false);
+  // Article fields
+  const [title, setTitle] = useState("");
+  const [category, setCategory] = useState("Water/Leaks");
+  const [severity, setSeverity] = useState("Medium");
+  const [yearsMin, setYearsMin] = useState("2010");
+  const [yearsMax, setYearsMax] = useState("2025");
 
-  const hasKey = useMemo(() => adminKey.trim().length > 0, [adminKey]);
+  const [customerSummary, setCustomerSummary] = useState("");
+  const [staffSummary, setStaffSummary] = useState("");
 
-  const load = useCallback(
-    async (isRefresh?: boolean) => {
-      if (!hasKey) return;
-      try {
-        setError("");
-        if (isRefresh) setRefreshing(true);
-        else setLoading(true);
+  const [symptoms, setSymptoms] = useState("");
+  const [likelyCauses, setLikelyCauses] = useState("");
+  const [diagnostics, setDiagnostics] = useState("");
+  const [steps, setSteps] = useState("");
+  const [tools, setTools] = useState("");
+  const [parts, setParts] = useState("");
+  const [safetyNotes, setSafetyNotes] = useState("");
 
-        const res = await adminLiveChatConversations(adminKey.trim());
-        if (!mounted.current) return;
-        setItems(res.conversations || []);
-      } catch (e: any) {
-        if (!mounted.current) return;
-        setError(String(e?.message ?? "Failed to load inbox."));
-      } finally {
-        if (!mounted.current) return;
-        setLoading(false);
-        setRefreshing(false);
-      }
-    },
-    [adminKey, hasKey]
-  );
+  // Optional decision tree JSON (string)
+  const [decisionTreeJson, setDecisionTreeJson] = useState("");
+
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    mounted.current = true;
     (async () => {
-      const saved = await getSavedAdminKey();
-      if (!mounted.current) return;
-      setAdminKeyState(saved);
-      setKeyDraft(saved);
-      setLoading(false);
+      const saved = (await AsyncStorage.getItem(ADMIN_KEY_STORAGE)) || "";
+      setAdminKey(saved);
     })();
-    return () => {
-      mounted.current = false;
-    };
   }, []);
 
-  useEffect(() => {
-    if (!hasKey) return;
-    load(false);
-  }, [hasKey, load]);
+  const canSubmit = useMemo(() => {
+    if (!adminKey.trim()) return false;
+    if (!title.trim()) return false;
+    const ymin = Number(yearsMin);
+    const ymax = Number(yearsMax);
+    if (!Number.isFinite(ymin) || !Number.isFinite(ymax)) return false;
+    if (ymin > ymax) return false;
+    if (!customerSummary.trim()) return false;
+    return true;
+  }, [adminKey, title, yearsMin, yearsMax, customerSummary]);
 
-  // ✅ Register push token after admin key exists (once per app launch; backend upserts)
-  useEffect(() => {
-    if (!hasKey) return;
-    if (pushRegisteredRef.current) return;
-
-    pushRegisteredRef.current = true;
-
-    (async () => {
-      try {
-        await registerForPushAndSendToBackend(OWNER_ID);
-      } catch (e) {
-        // don't block inbox if push fails
-      }
-    })();
-  }, [hasKey]);
-
-  async function applyKey() {
-    const k = keyDraft.trim();
-    if (!k) return;
-    await saveAdminKey(k);
-    setAdminKeyState(k);
+  async function saveKey() {
+    const k = adminKey.trim();
+    await AsyncStorage.setItem(ADMIN_KEY_STORAGE, k);
+    Alert.alert("Saved", "Admin key saved on this device.");
   }
 
-  async function logout() {
-    await clearAdminKey();
-    setAdminKeyState("");
-    setKeyDraft("");
-    setItems([]);
-    setError("");
-    pushRegisteredRef.current = false;
+  function clearForm() {
+    setTitle("");
+    setCategory("Water/Leaks");
+    setSeverity("Medium");
+    setYearsMin("2010");
+    setYearsMax("2025");
+    setCustomerSummary("");
+    setStaffSummary("");
+    setSymptoms("");
+    setLikelyCauses("");
+    setDiagnostics("");
+    setSteps("");
+    setTools("");
+    setParts("");
+    setSafetyNotes("");
+    setDecisionTreeJson("");
   }
 
-  const renderItem = ({ item }: { item: AdminConversationItem }) => {
-    const last = item.last_message;
-    return (
-      <Pressable
-        onPress={() =>
-          router.push({
-            pathname: "/admin-chat",
-            params: {
-              conversation_id: item.conversation_id,
-              customer_id: item.customer_id,
-            },
-          })
+  async function submit() {
+    try {
+      setSubmitting(true);
+
+      let decisionTree: any = null;
+      if (decisionTreeJson.trim()) {
+        try {
+          decisionTree = safeJsonParse(decisionTreeJson);
+        } catch (e) {
+          Alert.alert("Decision Tree JSON invalid", "Fix the JSON or clear the field.");
+          return;
         }
-        style={({ pressed }) => [styles.row, pressed && { opacity: 0.92 }]}
-      >
-        <View style={{ flex: 1, gap: 6 }}>
-          <Text style={styles.rowTitle}>Session: {item.customer_id?.slice(0, 8)}…</Text>
-          {!!last?.body && (
-            <Text style={styles.rowSub} numberOfLines={2}>
-              {last.sender_role === "owner" ? "You: " : "Customer: "}
-              {last.body}
-            </Text>
-          )}
-          {!!last?.created_at && <Text style={styles.rowMeta}>{fmt(last.created_at)}</Text>}
-        </View>
-        <Text style={styles.chev}>›</Text>
-      </Pressable>
-    );
-  };
+      }
+
+      const payload = {
+        title: title.trim(),
+        category: category.trim(),
+        severity: severity.trim(),
+        years_min: Number(yearsMin),
+        years_max: Number(yearsMax),
+
+        customer_summary: customerSummary.trim(),
+        staff_summary: staffSummary.trim(),
+
+        // These are arrays (nice for structured KB)
+        symptoms: linesToArray(symptoms),
+        likely_causes: linesToArray(likelyCauses),
+        diagnostics: linesToArray(diagnostics),
+        steps: linesToArray(steps),
+        tools: linesToArray(tools),
+        parts: linesToArray(parts),
+        safety_notes: linesToArray(safetyNotes),
+
+        // Optional object
+        decision_tree: decisionTree,
+      };
+
+      const r = await fetch(`${API_BASE_URL}/v1/admin/articles`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Admin-Key": adminKey.trim(),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const text = await r.text();
+      if (!r.ok) {
+        throw new Error(text || `Request failed (${r.status})`);
+      }
+
+      Alert.alert("Success", "Article saved.");
+      clearForm();
+    } catch (e: any) {
+      Alert.alert("Error", String(e?.message ?? e));
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Live Chat Inbox</Text>
-        <Text style={styles.sub}>Reply to customers as the owner.</Text>
-      </View>
+      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        <View style={styles.header}>
+          <Text style={styles.title}>Admin</Text>
+          <Text style={styles.sub}>Create / update troubleshooting articles.</Text>
 
-      {!hasKey ? (
+          <View style={styles.headerBtns}>
+            <Pressable style={styles.smallBtn} onPress={() => router.push("/admin-inbox")}>
+              <Text style={styles.smallBtnText}>Live Chat Inbox</Text>
+            </Pressable>
+          </View>
+        </View>
+
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Admin key required</Text>
-          <Text style={styles.help}>Paste the same ADMIN_API_KEY you use for saving KB articles.</Text>
+          <Text style={styles.cardTitle}>Admin Key</Text>
           <TextInput
-            value={keyDraft}
-            onChangeText={setKeyDraft}
+            value={adminKey}
+            onChangeText={setAdminKey}
             placeholder="Paste ADMIN_API_KEY"
             placeholderTextColor="rgba(255,255,255,0.35)"
             autoCapitalize="none"
             style={styles.input}
           />
-          <Pressable
-            onPress={applyKey}
-            disabled={!keyDraft.trim()}
-            style={({ pressed }) => [
-              styles.btn,
-              !keyDraft.trim() && styles.btnDisabled,
-              pressed && keyDraft.trim() && { opacity: 0.92 },
-            ]}
-          >
-            <Text style={styles.btnText}>Unlock Inbox</Text>
-          </Pressable>
-
-          {!!error && <Text style={styles.error}>{error}</Text>}
-        </View>
-      ) : (
-        <>
-          <View style={styles.toolbar}>
-            <Pressable onPress={() => load(true)} style={({ pressed }) => [styles.toolbarBtn, pressed && { opacity: 0.92 }]}>
-              <Text style={styles.toolbarText}>Refresh</Text>
+          <View style={styles.row}>
+            <Pressable style={styles.btn} onPress={saveKey}>
+              <Text style={styles.btnText}>Save Key</Text>
             </Pressable>
-            <Pressable onPress={logout} style={({ pressed }) => [styles.toolbarBtn, pressed && { opacity: 0.92 }]}>
-              <Text style={styles.toolbarText}>Change Key</Text>
+          </View>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Article</Text>
+
+          <Text style={styles.label}>Title</Text>
+          <TextInput value={title} onChangeText={setTitle} style={styles.input} placeholder="Ex: Fresh water pump runs but no water" placeholderTextColor="rgba(255,255,255,0.35)" />
+
+          <View style={styles.grid2}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>Category</Text>
+              <TextInput value={category} onChangeText={setCategory} style={styles.input} placeholder="Water/Leaks" placeholderTextColor="rgba(255,255,255,0.35)" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>Severity</Text>
+              <TextInput value={severity} onChangeText={setSeverity} style={styles.input} placeholder="Low / Medium / High" placeholderTextColor="rgba(255,255,255,0.35)" />
+            </View>
+          </View>
+
+          <View style={styles.grid2}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>Years Min</Text>
+              <TextInput value={yearsMin} onChangeText={setYearsMin} style={styles.input} keyboardType="number-pad" placeholder="2010" placeholderTextColor="rgba(255,255,255,0.35)" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>Years Max</Text>
+              <TextInput value={yearsMax} onChangeText={setYearsMax} style={styles.input} keyboardType="number-pad" placeholder="2025" placeholderTextColor="rgba(255,255,255,0.35)" />
+            </View>
+          </View>
+
+          <Text style={styles.label}>Customer Summary (required)</Text>
+          <TextInput
+            value={customerSummary}
+            onChangeText={setCustomerSummary}
+            style={[styles.input, styles.textArea]}
+            multiline
+            placeholder="Plain-English answer the customer sees…"
+            placeholderTextColor="rgba(255,255,255,0.35)"
+          />
+
+          <Text style={styles.label}>Staff Summary (optional)</Text>
+          <TextInput
+            value={staffSummary}
+            onChangeText={setStaffSummary}
+            style={[styles.input, styles.textArea]}
+            multiline
+            placeholder="Technician notes / deeper detail…"
+            placeholderTextColor="rgba(255,255,255,0.35)"
+          />
+
+          <Text style={styles.label}>Symptoms (one per line)</Text>
+          <TextInput value={symptoms} onChangeText={setSymptoms} style={[styles.input, styles.textArea]} multiline placeholder="Pump runs but no flow…" placeholderTextColor="rgba(255,255,255,0.35)" />
+
+          <Text style={styles.label}>Likely Causes (one per line)</Text>
+          <TextInput value={likelyCauses} onChangeText={setLikelyCauses} style={[styles.input, styles.textArea]} multiline placeholder="Air leak on suction side…" placeholderTextColor="rgba(255,255,255,0.35)" />
+
+          <Text style={styles.label}>Diagnostics (one per line)</Text>
+          <TextInput value={diagnostics} onChangeText={setDiagnostics} style={[styles.input, styles.textArea]} multiline placeholder="Check pump strainer…" placeholderTextColor="rgba(255,255,255,0.35)" />
+
+          <Text style={styles.label}>Steps / Fix (one per line)</Text>
+          <TextInput value={steps} onChangeText={setSteps} style={[styles.input, styles.textArea]} multiline placeholder="Prime pump…\nInspect fittings…" placeholderTextColor="rgba(255,255,255,0.35)" />
+
+          <Text style={styles.label}>Tools (one per line)</Text>
+          <TextInput value={tools} onChangeText={setTools} style={[styles.input, styles.textArea]} multiline placeholder="Screwdriver…" placeholderTextColor="rgba(255,255,255,0.35)" />
+
+          <Text style={styles.label}>Parts (one per line)</Text>
+          <TextInput value={parts} onChangeText={setParts} style={[styles.input, styles.textArea]} multiline placeholder="Pump strainer…" placeholderTextColor="rgba(255,255,255,0.35)" />
+
+          <Text style={styles.label}>Safety Notes (one per line)</Text>
+          <TextInput value={safetyNotes} onChangeText={setSafetyNotes} style={[styles.input, styles.textArea]} multiline placeholder="Turn off propane…" placeholderTextColor="rgba(255,255,255,0.35)" />
+
+          <Text style={styles.label}>Decision Tree JSON (optional)</Text>
+          <TextInput
+            value={decisionTreeJson}
+            onChangeText={setDecisionTreeJson}
+            style={[styles.input, styles.jsonArea]}
+            multiline
+            autoCapitalize="none"
+            placeholder='{"question":"...","options":[...]}'
+            placeholderTextColor="rgba(255,255,255,0.35)"
+          />
+
+          <View style={styles.row}>
+            <Pressable style={[styles.btn, !canSubmit && styles.btnDisabled]} disabled={!canSubmit || submitting} onPress={submit}>
+              <Text style={styles.btnText}>{submitting ? "Saving…" : "Save Article"}</Text>
+            </Pressable>
+
+            <Pressable style={[styles.btn, styles.btnGhost]} onPress={clearForm} disabled={submitting}>
+              <Text style={[styles.btnText, styles.btnGhostText]}>Clear</Text>
             </Pressable>
           </View>
 
-          {!!error && (
-            <View style={styles.errorBox}>
-              <Text style={styles.errorText}>{error}</Text>
-            </View>
-          )}
+          <Text style={styles.hint}>
+            Endpoint: POST {API_BASE_URL}/v1/admin/articles
+          </Text>
+        </View>
 
-          {loading ? (
-            <View style={styles.loading}>
-              <ActivityIndicator />
-              <Text style={styles.loadingText}>Loading conversations…</Text>
-            </View>
-          ) : (
-            <FlatList
-              data={items}
-              keyExtractor={(x) => x.conversation_id}
-              contentContainerStyle={styles.list}
-              renderItem={renderItem}
-              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} />}
-              ListEmptyComponent={
-                <View style={styles.empty}>
-                  <Text style={styles.emptyTitle}>No conversations yet</Text>
-                  <Text style={styles.emptySub}>When customers message you, they’ll show up here.</Text>
-                </View>
-              }
-            />
-          )}
-        </>
-      )}
+        <View style={{ height: 30 }} />
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#0B0F14" },
+  scroll: { padding: 16, paddingBottom: 40 },
 
-  header: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 6 },
-  title: { color: "white", fontSize: 20, fontWeight: "900" },
-  sub: { color: "rgba(255,255,255,0.65)", marginTop: 4 },
+  header: { gap: 6, marginBottom: 12 },
+  title: { color: "white", fontSize: 22, fontWeight: "900" },
+  sub: { color: "rgba(255,255,255,0.65)" },
+  headerBtns: { flexDirection: "row", gap: 10, marginTop: 6 },
 
   card: {
-    margin: 16,
     padding: 14,
     borderRadius: 18,
     backgroundColor: "rgba(255,255,255,0.06)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.10)",
     gap: 10,
+    marginTop: 12,
   },
   cardTitle: { color: "white", fontSize: 15, fontWeight: "900" },
-  help: { color: "rgba(255,255,255,0.55)", fontSize: 12, lineHeight: 16 },
+
+  label: { color: "rgba(255,255,255,0.75)", fontWeight: "800", marginTop: 8 },
 
   input: {
     borderRadius: 14,
     paddingHorizontal: 12,
-    paddingVertical: 12,
+    paddingVertical: Platform.OS === "ios" ? 12 : 10,
     backgroundColor: "rgba(255,255,255,0.07)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.10)",
     color: "white",
+    marginTop: 6,
   },
+  textArea: { minHeight: 92, textAlignVertical: "top" },
+  jsonArea: { minHeight: 140, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", textAlignVertical: "top" },
+
+  grid2: { flexDirection: "row", gap: 10 },
+
+  row: { flexDirection: "row", gap: 10, marginTop: 10 },
 
   btn: {
+    flex: 1,
     height: 48,
     borderRadius: 16,
     backgroundColor: "white",
     alignItems: "center",
     justifyContent: "center",
   },
-  btnDisabled: { opacity: 0.45 },
+  btnDisabled: { opacity: 0.4 },
   btnText: { color: "#0B0F14", fontWeight: "900" },
 
-  error: { color: "rgba(239,68,68,0.95)", fontWeight: "800" },
+  btnGhost: {
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.18)",
+  },
+  btnGhostText: { color: "white" },
 
-  toolbar: { flexDirection: "row", gap: 10, paddingHorizontal: 16, paddingBottom: 10 },
-  toolbarBtn: {
-    height: 44,
-    paddingHorizontal: 14,
+  smallBtn: {
+    height: 40,
+    paddingHorizontal: 12,
     borderRadius: 14,
     backgroundColor: "rgba(255,255,255,0.08)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.10)",
     alignItems: "center",
     justifyContent: "center",
+    alignSelf: "flex-start",
   },
-  toolbarText: { color: "white", fontWeight: "900" },
+  smallBtnText: { color: "white", fontWeight: "900" },
 
-  errorBox: {
-    marginHorizontal: 16,
-    marginBottom: 10,
-    padding: 10,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "rgba(239,68,68,0.35)",
-    backgroundColor: "rgba(239,68,68,0.12)",
-  },
-  errorText: { color: "white", fontWeight: "900" },
-
-  loading: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10 },
-  loadingText: { color: "rgba(255,255,255,0.75)", fontWeight: "800" },
-
-  list: { paddingHorizontal: 16, paddingBottom: 20 },
-
-  row: {
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    marginBottom: 10,
-  },
-  rowTitle: { color: "white", fontWeight: "900" },
-  rowSub: { color: "rgba(255,255,255,0.70)", lineHeight: 18 },
-  rowMeta: { color: "rgba(255,255,255,0.45)", fontSize: 12, fontWeight: "700" },
-  chev: { color: "rgba(255,255,255,0.55)", fontSize: 26, fontWeight: "900" },
-
-  empty: { padding: 24, alignItems: "center", gap: 8 },
-  emptyTitle: { color: "white", fontWeight: "900", fontSize: 16 },
-  emptySub: { color: "rgba(255,255,255,0.65)", textAlign: "center" },
+  hint: { marginTop: 10, color: "rgba(255,255,255,0.45)", fontSize: 12, fontWeight: "700" },
 });

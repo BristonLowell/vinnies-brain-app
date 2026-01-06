@@ -22,6 +22,9 @@ type Msg = {
   conversation_id?: string;
 };
 
+const INPUT_BAR_EST_HEIGHT = 76; // gives the list breathing room above the input
+const IOS_KEYBOARD_OFFSET = 90; // adjust if you have a taller header/nav
+
 export default function LiveChat() {
   const [sessionId, setSessionId] = useState<string>("");
   const [conversationId, setConversationId] = useState<string>("");
@@ -42,7 +45,6 @@ export default function LiveChat() {
   }, []);
 
   const computeSig = (msgs: Msg[]) => {
-    // simple signature to avoid re-setting state when nothing changed
     const last = msgs?.[msgs.length - 1];
     return `${msgs.length}:${last?.id ?? ""}:${last?.created_at ?? ""}`;
   };
@@ -63,7 +65,6 @@ export default function LiveChat() {
           requestAnimationFrame(scrollToBottom);
         }
       } catch (e: any) {
-        // Don’t spam the UI on transient errors; show something useful though
         const msg = String(e?.message ?? "Failed to load live chat.");
         setError(msg);
       }
@@ -80,13 +81,12 @@ export default function LiveChat() {
         setReady(false);
         setLoading(true);
 
-        const sid = await getOrCreateSession(); // reuse existing session (no login needed)
+        const sid = await getOrCreateSession();
         if (cancelled) return;
 
         setSessionId(sid);
 
         await refresh(sid);
-
         if (cancelled) return;
 
         setReady(true);
@@ -102,7 +102,6 @@ export default function LiveChat() {
     };
   }, [refresh]);
 
-  // Poll every 2s for new messages (no Supabase auth / realtime needed)
   useEffect(() => {
     if (!sessionId) return;
 
@@ -139,7 +138,11 @@ export default function LiveChat() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
-      <KeyboardAvoidingView style={styles.safe} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <KeyboardAvoidingView
+        style={styles.safe}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={Platform.OS === "ios" ? IOS_KEYBOARD_OFFSET : 0}
+      >
         <View style={styles.header}>
           <Text style={styles.title}>Live chat with Vinnies</Text>
           <Text style={styles.sub}>You’re chatting directly with the owner.</Text>
@@ -162,7 +165,8 @@ export default function LiveChat() {
             ref={listRef}
             data={messages}
             keyExtractor={(m) => m.id}
-            contentContainerStyle={styles.list}
+            contentContainerStyle={[styles.list, { paddingBottom: INPUT_BAR_EST_HEIGHT + 16 }]}
+            keyboardShouldPersistTaps="handled"
             onContentSizeChange={() => scrollToBottom()}
             renderItem={({ item }) => {
               const mine = item.sender_role === "customer";

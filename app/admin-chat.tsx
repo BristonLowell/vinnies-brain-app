@@ -19,8 +19,18 @@ import {
   getSavedAdminKey,
   type LiveChatHistoryResponse,
 } from "../src/api";
+import { API_BASE_URL } from "../src/config"; // ✅ assumes you already have this like other screens do
 
 type Msg = LiveChatHistoryResponse["messages"][number];
+
+type AiMsg = {
+  role: "user" | "assistant";
+  text: string;
+  created_at?: string;
+};
+
+const INPUT_BAR_EST_HEIGHT = 76;
+const IOS_KEYBOARD_OFFSET = 90;
 
 function fmt(ts?: string) {
   if (!ts) return "";
@@ -34,7 +44,7 @@ export default function AdminChat() {
   const params = useLocalSearchParams<{ conversation_id?: string; customer_id?: string }>();
 
   const conversationId = String(params.conversation_id || "");
-  const customerId = String(params.customer_id || "");
+  const customerId = String(params.customer_id || ""); // this is your session_id
 
   const [adminKey, setAdminKey] = useState("");
   const [loading, setLoading] = useState(true);
@@ -42,6 +52,11 @@ export default function AdminChat() {
   const [error, setError] = useState("");
   const [messages, setMessages] = useState<Msg[]>([]);
   const [text, setText] = useState("");
+
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [aiMessages, setAiMessages] = useState<AiMsg[]>([]);
+  const [showAi, setShowAi] = useState(true);
 
   const listRef = useRef<FlatList<Msg>>(null);
   const pollRef = useRef<any>(null);
@@ -57,6 +72,30 @@ export default function AdminChat() {
     const last = msgs?.[msgs.length - 1];
     return `${msgs.length}:${last?.id ?? ""}:${last?.created_at ?? ""}`;
   };
+
+  const fetchAiHistory = useCallback(
+    async (key: string) => {
+      if (!customerId) return;
+      try {
+        setAiError("");
+        setAiLoading(true);
+
+        const r = await fetch(`${API_BASE_URL}/v1/admin/ai-history/${customerId}`, {
+          headers: { "X-Admin-Key": key },
+        });
+        if (!r.ok) throw new Error(await r.text());
+
+        const data = await r.json();
+        const msgs = Array.isArray(data?.messages) ? (data.messages as AiMsg[]) : [];
+        setAiMessages(msgs);
+      } catch (e: any) {
+        setAiError(String(e?.message ?? "Failed to load AI history."));
+      } finally {
+        setAiLoading(false);
+      }
+    },
+    [customerId]
+  );
 
   const refresh = useCallback(
     async (key: string) => {
@@ -93,7 +132,7 @@ export default function AdminChat() {
         }
 
         setAdminKey(key);
-        await refresh(key);
+        await Promise.all([refresh(key), fetchAiHistory(key)]);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -102,7 +141,7 @@ export default function AdminChat() {
     return () => {
       cancelled = true;
     };
-  }, [refresh]);
+  }, [refresh, fetchAiHistory]);
 
   useEffect(() => {
     if (!adminKey || !conversationId) return;
@@ -151,13 +190,55 @@ export default function AdminChat() {
     );
   }
 
+  const AiHeader = (
+    <View style={styles.aiWrap}>
+      <View style={styles.aiTopRow}>
+        <Text style={styles.aiTitle}>AI troubleshooting so far</Text>
+        <Pressable onPress={() => setShowAi((v) => !v)} style={styles.aiToggleBtn}>
+          <Text style={styles.aiToggleText}>{showAi ? "Hide" : "Show"}</Text>
+        </Pressable>
+      </View>
+
+      {aiLoading ? (
+        <Text style={styles.aiSub}>Loading…</Text>
+      ) : aiError ? (
+        <Text style={styles.aiErr}>{aiError}</Text>
+      ) : !showAi ? null : aiMessages.length === 0 ? (
+        <Text style={styles.aiSub}>No AI chat history yet.</Text>
+      ) : (
+        <View style={styles.aiMsgs}>
+          {aiMessages.slice(-10).map((m, idx) => (
+            <View key={idx} style={styles.aiMsgRow}>
+              <Text style={styles.aiRole}>{m.role === "assistant" ? "AI" : "User"}</Text>
+              <Text style={styles.aiText}>{m.text}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
-      <KeyboardAvoidingView style={styles.safe} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <KeyboardAvoidingView
+        style={styles.safe}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={Platform.OS === "ios" ? IOS_KEYBOARD_OFFSET : 0}
+      >
         <View style={styles.header}>
           <Text style={styles.title}>Live Chat (Admin)</Text>
           {!!customerId && <Text style={styles.meta}>Session: {customerId.slice(0, 8)}…</Text>}
           <Text style={styles.meta}>Conversation: {conversationId.slice(0, 8)}…</Text>
+
+          {!!customerId && (
+            <Pressable
+              style={styles.refreshAiBtn}
+              onPress={() => adminKey && fetchAiHistory(adminKey)}
+              disabled={!adminKey || aiLoading}
+            >
+              <Text style={styles.refreshAiText}>{aiLoading ? "Loading…" : "Refresh AI History"}</Text>
+            </Pressable>
+          )}
         </View>
 
         {!!error && (
@@ -176,8 +257,10 @@ export default function AdminChat() {
             ref={listRef}
             data={messages}
             keyExtractor={(m) => m.id}
-            contentContainerStyle={styles.list}
+            contentContainerStyle={[styles.list, { paddingBottom: INPUT_BAR_EST_HEIGHT + 16 }]}
+            ListHeaderComponent={customerId ? AiHeader : null}
             onContentSizeChange={() => scrollToBottom()}
+            keyboardShouldPersistTaps="handled"
             renderItem={({ item }) => {
               const mine = item.sender_role === "owner";
               return (
@@ -215,6 +298,20 @@ const styles = StyleSheet.create({
   title: { color: "white", fontSize: 18, fontWeight: "900" },
   sub: { marginTop: 2, color: "rgba(255,255,255,0.65)" },
   meta: { marginTop: 4, color: "rgba(255,255,255,0.45)", fontSize: 12, fontWeight: "700" },
+
+  refreshAiBtn: {
+    marginTop: 10,
+    height: 38,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    backgroundColor: "rgba(255,255,255,0.10)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+    alignSelf: "flex-start",
+  },
+  refreshAiText: { color: "white", fontWeight: "900", fontSize: 12 },
 
   backBtn: {
     marginTop: 10,
@@ -256,6 +353,34 @@ const styles = StyleSheet.create({
   theirs: { alignSelf: "flex-start", backgroundColor: "#111827", borderColor: "rgba(255,255,255,0.10)" },
   msgText: { color: "white", fontSize: 15, lineHeight: 20 },
   timeText: { color: "rgba(255,255,255,0.65)", fontSize: 11, fontWeight: "700" },
+
+  aiWrap: {
+    padding: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    backgroundColor: "rgba(255,255,255,0.05)",
+    marginBottom: 10,
+  },
+  aiTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  aiTitle: { color: "white", fontWeight: "900" },
+  aiToggleBtn: {
+    height: 30,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: "rgba(255,255,255,0.10)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  aiToggleText: { color: "white", fontWeight: "900", fontSize: 12 },
+  aiSub: { color: "rgba(255,255,255,0.65)", marginTop: 8, fontWeight: "700" },
+  aiErr: { color: "rgba(239,68,68,0.95)", marginTop: 8, fontWeight: "900" },
+  aiMsgs: { marginTop: 10, gap: 10 },
+  aiMsgRow: { gap: 4 },
+  aiRole: { color: "rgba(255,255,255,0.75)", fontWeight: "900", fontSize: 12 },
+  aiText: { color: "white", fontSize: 14, lineHeight: 19 },
 
   inputWrap: {
     flexDirection: "row",

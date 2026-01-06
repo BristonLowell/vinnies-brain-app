@@ -1,555 +1,314 @@
-import { useMemo, useState } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useRouter } from "expo-router";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   View,
   Text,
   TextInput,
   Pressable,
   StyleSheet,
-  ScrollView,
+  FlatList,
+  ActivityIndicator,
+  RefreshControl,
   Alert,
-  StatusBar,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useRouter } from "expo-router";
+import * as Notifications from "expo-notifications";
+import Constants from "expo-constants";
+import * as Device from "expo-device";
+
+import {
+  adminLiveChatConversations,
+  clearAdminKey,
+  getSavedAdminKey,
+  saveAdminKey,
+  type AdminConversationItem,
+} from "../src/api";
 import { API_BASE_URL } from "../src/config";
 
-type QItem = { q: string; yes?: string; no?: string };
+// ✅ OPTION A: put your Supabase user UUID here (same value as Render env OWNER_SUPABASE_USER_ID)
+const OWNER_ID = "PASTE_YOUR_SUPABASE_USER_UUID_HERE";
 
-function normalizeLines(items: string[]) {
-  return items.map((x) => x.trim()).filter(Boolean);
+function fmt(ts?: string) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts;
+  return d.toLocaleString();
 }
 
-export default function Admin() {
-  const router = useRouter();
-  const [adminKey, setAdminKey] = useState("");
+// Recommended by Expo so notifications show while app open (optional)
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldPlaySound: false,
+    shouldSetBadge: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+});
 
-  // Article basics
-  const [title, setTitle] = useState("");
-  const [category, setCategory] = useState("Water/Leaks");
-  const [severity, setSeverity] = useState("Medium");
-  const [yearsMin, setYearsMin] = useState("2010");
-  const [yearsMax, setYearsMax] = useState("2025");
-  const [summary, setSummary] = useState("");
-
-  // List builders
-  const [questions, setQuestions] = useState<QItem[]>([]);
-  const [steps, setSteps] = useState<string[]>([]);
-  const [notes, setNotes] = useState<string[]>([]);
-  const [stop, setStop] = useState<string[]>([]);
-  const [nextStep, setNextStep] = useState("");
-
-  // Draft inputs
-  const [qDraft, setQDraft] = useState("");
-  const [qYesDraft, setQYesDraft] = useState("");
-  const [qNoDraft, setQNoDraft] = useState("");
-
-  const [stepDraft, setStepDraft] = useState("");
-  const [noteDraft, setNoteDraft] = useState("");
-  const [stopDraft, setStopDraft] = useState("");
-
-  const [saving, setSaving] = useState(false);
-
-  const canAddQuestion = useMemo(() => qDraft.trim().length > 0, [qDraft]);
-  const canAddStep = useMemo(() => stepDraft.trim().length > 0, [stepDraft]);
-  const canAddNote = useMemo(() => noteDraft.trim().length > 0, [noteDraft]);
-  const canAddStop = useMemo(() => stopDraft.trim().length > 0, [stopDraft]);
-
-  function addQuestion() {
-    const q = qDraft.trim();
-    if (!q) return;
-
-    const yes = qYesDraft.trim();
-    const no = qNoDraft.trim();
-
-    setQuestions((prev) => [...prev, { q, yes: yes || undefined, no: no || undefined }]);
-    setQDraft("");
-    setQYesDraft("");
-    setQNoDraft("");
+async function registerForPushAndSendToBackend(ownerId: string) {
+  if (!ownerId || ownerId.includes("PASTE_YOUR")) {
+    // Don’t crash; just skip until you paste it in
+    return;
   }
 
-  function removeQuestion(idx: number) {
-    setQuestions((prev) => prev.filter((_, i) => i !== idx));
+  if (!Device.isDevice) {
+    // Push tokens don’t work on simulators
+    return;
   }
 
-  function addToList(kind: "steps" | "notes" | "stop") {
-    if (kind === "steps") {
-      const s = stepDraft.trim();
-      if (!s) return;
-      setSteps((prev) => [...prev, s]);
-      setStepDraft("");
-      return;
-    }
+  // Ask permission
+  const existing = await Notifications.getPermissionsAsync();
+  let status = existing.status;
 
-    if (kind === "notes") {
-      const n = noteDraft.trim();
-      if (!n) return;
-      setNotes((prev) => [...prev, n]);
-      setNoteDraft("");
-      return;
-    }
-
-    const st = stopDraft.trim();
-    if (!st) return;
-    setStop((prev) => [...prev, st]);
-    setStopDraft("");
+  if (status !== "granted") {
+    const req = await Notifications.requestPermissionsAsync();
+    status = req.status;
   }
 
-  function removeFromList(kind: "steps" | "notes" | "stop", idx: number) {
-    if (kind === "steps") return setSteps((prev) => prev.filter((_, i) => i !== idx));
-    if (kind === "notes") return setNotes((prev) => prev.filter((_, i) => i !== idx));
-    return setStop((prev) => prev.filter((_, i) => i !== idx));
-  }
+  if (status !== "granted") return;
 
-  function buildDecisionTree() {
-    // { q0: { yes: { say }, no: { say } }, q1: ... }
-    const tree: Record<string, any> = {};
-    questions.forEach((item, i) => {
-      const node: any = {};
-      if (item.yes?.trim()) node.yes = { say: item.yes.trim() };
-      if (item.no?.trim()) node.no = { say: item.no.trim() };
-      if (Object.keys(node).length) tree[`q${i}`] = node;
+  // Needed on Android
+  if (Platform.OS === "android") {
+    await Notifications.setNotificationChannelAsync("default", {
+      name: "default",
+      importance: Notifications.AndroidImportance.DEFAULT,
     });
-    return tree;
   }
 
-  async function openLiveChatInbox() {
-    const key = adminKey.trim();
-    if (!key) return Alert.alert("Missing admin key", "Enter your ADMIN_API_KEY first.");
-    await AsyncStorage.setItem("vinniesbrain_admin_key", key);
-    router.push("/admin-inbox");
-  }
+  // Get Expo push token
+  const projectId =
+    // modern
+    (Constants.expoConfig as any)?.extra?.eas?.projectId ||
+    // fallback
+    (Constants as any)?.easConfig?.projectId;
 
-  async function save() {
-    if (!adminKey.trim())
-      return Alert.alert("Missing admin key", "Enter your ADMIN_API_KEY.");
-    if (!title.trim()) return Alert.alert("Missing title", "Title is required.");
-    if (!summary.trim()) return Alert.alert("Missing summary", "Summary is required.");
-    if (!nextStep.trim()) return Alert.alert("Missing next step", "Next step is required.");
+  const tokenResp = await Notifications.getExpoPushTokenAsync(
+    projectId ? { projectId } : undefined
+  );
 
-    const clarifying_questions = normalizeLines(questions.map((q) => q.q));
-    const decision_tree = buildDecisionTree();
+  const expoPushToken = tokenResp.data;
 
-    setSaving(true);
-    try {
-      const payload = {
-        title: title.trim(),
-        category: category.trim(),
-        severity: severity.trim(),
-        years_min: Number(yearsMin),
-        years_max: Number(yearsMax),
-        customer_summary: summary.trim(),
-        clarifying_questions,
-        steps: normalizeLines(steps),
-        model_year_notes: normalizeLines(notes),
-        stop_and_escalate: normalizeLines(stop),
-        next_step: nextStep.trim(),
-        decision_tree,
-      };
+  // Send to backend
+  await fetch(`${API_BASE_URL}/v1/owner/push-token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ owner_id: ownerId, expo_push_token: expoPushToken }),
+  });
+}
 
-      const res = await fetch(`${API_BASE_URL}/v1/admin/kb/upsert`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Admin-Key": adminKey.trim(),
-        },
-        body: JSON.stringify(payload),
-      });
+export default function AdminInbox() {
+  const router = useRouter();
 
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(`HTTP ${res.status}: ${txt}`);
+  const [adminKey, setAdminKeyState] = useState("");
+  const [keyDraft, setKeyDraft] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+  const [items, setItems] = useState<AdminConversationItem[]>([]);
+
+  const mounted = useRef(true);
+  const pushRegisteredRef = useRef(false);
+
+  const hasKey = useMemo(() => adminKey.trim().length > 0, [adminKey]);
+
+  const load = useCallback(
+    async (isRefresh?: boolean) => {
+      if (!hasKey) return;
+      try {
+        setError("");
+        if (isRefresh) setRefreshing(true);
+        else setLoading(true);
+
+        const res = await adminLiveChatConversations(adminKey.trim());
+        if (!mounted.current) return;
+        setItems(res.conversations || []);
+      } catch (e: any) {
+        if (!mounted.current) return;
+        setError(String(e?.message ?? "Failed to load inbox."));
+      } finally {
+        if (!mounted.current) return;
+        setLoading(false);
+        setRefreshing(false);
       }
+    },
+    [adminKey, hasKey]
+  );
 
-      const data = await res.json();
-      Alert.alert("Saved ✅", `Article ID: ${data.id}`);
+  useEffect(() => {
+    mounted.current = true;
+    (async () => {
+      const saved = await getSavedAdminKey();
+      if (!mounted.current) return;
+      setAdminKeyState(saved);
+      setKeyDraft(saved);
+      setLoading(false);
+    })();
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
-      // Clear (keep key)
-      setTitle("");
-      setSummary("");
-      setQuestions([]);
-      setSteps([]);
-      setNotes([]);
-      setStop([]);
-      setNextStep("");
-    } catch (e: any) {
-      Alert.alert("Save failed", e.message);
-    } finally {
-      setSaving(false);
-    }
+  useEffect(() => {
+    if (!hasKey) return;
+    load(false);
+  }, [hasKey, load]);
+
+  // ✅ Register push token after admin key exists (once per app launch; backend upserts)
+  useEffect(() => {
+    if (!hasKey) return;
+    if (pushRegisteredRef.current) return;
+
+    pushRegisteredRef.current = true;
+
+    (async () => {
+      try {
+        await registerForPushAndSendToBackend(OWNER_ID);
+      } catch (e) {
+        // don't block inbox if push fails
+      }
+    })();
+  }, [hasKey]);
+
+  async function applyKey() {
+    const k = keyDraft.trim();
+    if (!k) return;
+    await saveAdminKey(k);
+    setAdminKeyState(k);
   }
+
+  async function logout() {
+    await clearAdminKey();
+    setAdminKeyState("");
+    setKeyDraft("");
+    setItems([]);
+    setError("");
+    pushRegisteredRef.current = false;
+  }
+
+  const renderItem = ({ item }: { item: AdminConversationItem }) => {
+    const last = item.last_message;
+    return (
+      <Pressable
+        onPress={() =>
+          router.push({
+            pathname: "/admin-chat",
+            params: {
+              conversation_id: item.conversation_id,
+              customer_id: item.customer_id,
+            },
+          })
+        }
+        style={({ pressed }) => [styles.row, pressed && { opacity: 0.92 }]}
+      >
+        <View style={{ flex: 1, gap: 6 }}>
+          <Text style={styles.rowTitle}>Session: {item.customer_id?.slice(0, 8)}…</Text>
+          {!!last?.body && (
+            <Text style={styles.rowSub} numberOfLines={2}>
+              {last.sender_role === "owner" ? "You: " : "Customer: "}
+              {last.body}
+            </Text>
+          )}
+          {!!last?.created_at && <Text style={styles.rowMeta}>{fmt(last.created_at)}</Text>}
+        </View>
+        <Text style={styles.chev}>›</Text>
+      </Pressable>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
-      <StatusBar barStyle="light-content" />
-      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-        <Text style={styles.pageTitle}>Admin</Text>
-        <Text style={styles.pageSub}>
-          Create / update knowledge base articles. Lists are item-by-item to prevent “jumbled” entries.
-        </Text>
+      <View style={styles.header}>
+        <Text style={styles.title}>Live Chat Inbox</Text>
+        <Text style={styles.sub}>Reply to customers as the owner.</Text>
+      </View>
 
-        {/* Security */}
+      {!hasKey ? (
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Security</Text>
-          <Text style={styles.help}>Admin key is required to save. Never shown to customers.</Text>
+          <Text style={styles.cardTitle}>Admin key required</Text>
+          <Text style={styles.help}>Paste the same ADMIN_API_KEY you use for saving KB articles.</Text>
           <TextInput
-            style={styles.input}
-            value={adminKey}
-            onChangeText={setAdminKey}
+            value={keyDraft}
+            onChangeText={setKeyDraft}
             placeholder="Paste ADMIN_API_KEY"
             placeholderTextColor="rgba(255,255,255,0.35)"
             autoCapitalize="none"
-          />
-
-          <Pressable
-            onPress={openLiveChatInbox}
-            disabled={!adminKey.trim()}
-            style={({ pressed }) => [
-              styles.smallBtn,
-              !adminKey.trim() && styles.smallBtnDisabled,
-              pressed && adminKey.trim() && { opacity: 0.92 },
-            ]}
-          >
-            <Text style={styles.smallBtnText}>Open Live Chat Inbox</Text>
-          </Pressable>
-        </View>
-
-        {/* Basics */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Article basics</Text>
-
-          <Text style={styles.label}>Title</Text>
-          <TextInput
             style={styles.input}
-            value={title}
-            onChangeText={setTitle}
-            placeholder='e.g., Water stain under curbside window after rain'
-            placeholderTextColor="rgba(255,255,255,0.35)"
           />
+          <Pressable
+            onPress={applyKey}
+            disabled={!keyDraft.trim()}
+            style={({ pressed }) => [
+              styles.btn,
+              !keyDraft.trim() && styles.btnDisabled,
+              pressed && keyDraft.trim() && { opacity: 0.92 },
+            ]}
+          >
+            <Text style={styles.btnText}>Unlock Inbox</Text>
+          </Pressable>
 
-          <View style={styles.row}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.label}>Category</Text>
-              <TextInput
-                style={styles.input}
-                value={category}
-                onChangeText={setCategory}
-                placeholder="Water/Leaks"
-                placeholderTextColor="rgba(255,255,255,0.35)"
-              />
-            </View>
-            <View style={{ width: 10 }} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.label}>Severity</Text>
-              <TextInput
-                style={styles.input}
-                value={severity}
-                onChangeText={setSeverity}
-                placeholder="Low / Medium / High"
-                placeholderTextColor="rgba(255,255,255,0.35)"
-              />
-            </View>
+          {!!error && <Text style={styles.error}>{error}</Text>}
+        </View>
+      ) : (
+        <>
+          <View style={styles.toolbar}>
+            <Pressable onPress={() => load(true)} style={({ pressed }) => [styles.toolbarBtn, pressed && { opacity: 0.92 }]}>
+              <Text style={styles.toolbarText}>Refresh</Text>
+            </Pressable>
+            <Pressable onPress={logout} style={({ pressed }) => [styles.toolbarBtn, pressed && { opacity: 0.92 }]}>
+              <Text style={styles.toolbarText}>Change Key</Text>
+            </Pressable>
           </View>
 
-          <View style={styles.row}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.label}>Years min</Text>
-              <TextInput
-                style={styles.input}
-                value={yearsMin}
-                onChangeText={setYearsMin}
-                keyboardType="number-pad"
-                placeholderTextColor="rgba(255,255,255,0.35)"
-              />
-            </View>
-            <View style={{ width: 10 }} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.label}>Years max</Text>
-              <TextInput
-                style={styles.input}
-                value={yearsMax}
-                onChangeText={setYearsMax}
-                keyboardType="number-pad"
-                placeholderTextColor="rgba(255,255,255,0.35)"
-              />
-            </View>
-          </View>
-
-          <Text style={styles.label}>Customer summary</Text>
-          <TextInput
-            style={[styles.input, styles.multiline]}
-            value={summary}
-            onChangeText={setSummary}
-            multiline
-            placeholder="Plain-language explanation customers will read first…"
-            placeholderTextColor="rgba(255,255,255,0.35)"
-          />
-        </View>
-
-        {/* Clarifying Questions Builder */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Clarifying questions</Text>
-          <Text style={styles.help}>
-            Add one question at a time. Optional: add a YES action and/or NO action for that question
-            (builds decision_tree automatically).
-          </Text>
-
-          <Text style={styles.label}>Question</Text>
-          <TextInput
-            style={[styles.input, styles.multilineSm]}
-            value={qDraft}
-            onChangeText={setQDraft}
-            multiline
-            placeholder='e.g., "Does this happen only during rain or also when washing?"'
-            placeholderTextColor="rgba(255,255,255,0.35)"
-          />
-
-          <View style={styles.row}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.label}>If YES, say/do (optional)</Text>
-              <TextInput
-                style={[styles.input, styles.multilineSm]}
-                value={qYesDraft}
-                onChangeText={setQYesDraft}
-                multiline
-                placeholder="Action if the user answers YES…"
-                placeholderTextColor="rgba(255,255,255,0.35)"
-              />
-            </View>
-            <View style={{ width: 10 }} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.label}>If NO, say/do (optional)</Text>
-              <TextInput
-                style={[styles.input, styles.multilineSm]}
-                value={qNoDraft}
-                onChangeText={setQNoDraft}
-                multiline
-                placeholder="Action if the user answers NO…"
-                placeholderTextColor="rgba(255,255,255,0.35)"
-              />
-            </View>
-          </View>
-
-          <Pressable
-            onPress={addQuestion}
-            disabled={!canAddQuestion}
-            style={({ pressed }) => [
-              styles.smallBtn,
-              !canAddQuestion && styles.smallBtnDisabled,
-              pressed && canAddQuestion && { opacity: 0.92 },
-            ]}
-          >
-            <Text style={styles.smallBtnText}>Add question</Text>
-          </Pressable>
-
-          {questions.length > 0 && (
-            <View style={{ marginTop: 10, gap: 10 }}>
-              {questions.map((q, i) => (
-                <View key={`${q.q}-${i}`} style={styles.itemCard}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.itemTitle}>{i + 1}. {q.q}</Text>
-                    {(q.yes || q.no) && (
-                      <View style={{ marginTop: 6, gap: 4 }}>
-                        {!!q.yes && <Text style={styles.itemMeta}>YES → {q.yes}</Text>}
-                        {!!q.no && <Text style={styles.itemMeta}>NO → {q.no}</Text>}
-                      </View>
-                    )}
-                  </View>
-
-                  <Pressable
-                    onPress={() => removeQuestion(i)}
-                    style={({ pressed }) => [styles.removeBtn, pressed && { opacity: 0.85 }]}
-                  >
-                    <Text style={styles.removeText}>Remove</Text>
-                  </Pressable>
-                </View>
-              ))}
+          {!!error && (
+            <View style={styles.errorBox}>
+              <Text style={styles.errorText}>{error}</Text>
             </View>
           )}
-        </View>
 
-        {/* Steps */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Troubleshooting steps</Text>
-          <Text style={styles.help}>Add one step at a time. Keep it clear + safe.</Text>
-
-          <TextInput
-            style={[styles.input, styles.multilineSm]}
-            value={stepDraft}
-            onChangeText={setStepDraft}
-            multiline
-            placeholder="e.g., Check the weep holes and clear debris…"
-            placeholderTextColor="rgba(255,255,255,0.35)"
-          />
-
-          <Pressable
-            onPress={() => addToList("steps")}
-            disabled={!canAddStep}
-            style={({ pressed }) => [
-              styles.smallBtn,
-              !canAddStep && styles.smallBtnDisabled,
-              pressed && canAddStep && { opacity: 0.92 },
-            ]}
-          >
-            <Text style={styles.smallBtnText}>Add step</Text>
-          </Pressable>
-
-          {steps.length > 0 && (
-            <View style={{ marginTop: 10, gap: 10 }}>
-              {steps.map((s, i) => (
-                <View key={`${s}-${i}`} style={styles.itemCard}>
-                  <Text style={[styles.itemTitle, { flex: 1 }]}>{i + 1}. {s}</Text>
-                  <Pressable
-                    onPress={() => removeFromList("steps", i)}
-                    style={({ pressed }) => [styles.removeBtn, pressed && { opacity: 0.85 }]}
-                  >
-                    <Text style={styles.removeText}>Remove</Text>
-                  </Pressable>
-                </View>
-              ))}
+          {loading ? (
+            <View style={styles.loading}>
+              <ActivityIndicator />
+              <Text style={styles.loadingText}>Loading conversations…</Text>
             </View>
-          )}
-        </View>
-
-        {/* Notes */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Model year notes</Text>
-          <Text style={styles.help}>Differences or warnings specific to certain years.</Text>
-
-          <TextInput
-            style={[styles.input, styles.multilineSm]}
-            value={noteDraft}
-            onChangeText={setNoteDraft}
-            multiline
-            placeholder="e.g., 2018–2020 units may route this wire differently…"
-            placeholderTextColor="rgba(255,255,255,0.35)"
-          />
-
-          <Pressable
-            onPress={() => addToList("notes")}
-            disabled={!canAddNote}
-            style={({ pressed }) => [
-              styles.smallBtn,
-              !canAddNote && styles.smallBtnDisabled,
-              pressed && canAddNote && { opacity: 0.92 },
-            ]}
-          >
-            <Text style={styles.smallBtnText}>Add note</Text>
-          </Pressable>
-
-          {notes.length > 0 && (
-            <View style={{ marginTop: 10, gap: 10 }}>
-              {notes.map((n, i) => (
-                <View key={`${n}-${i}`} style={styles.itemCard}>
-                  <Text style={[styles.itemTitle, { flex: 1 }]}>{i + 1}. {n}</Text>
-                  <Pressable
-                    onPress={() => removeFromList("notes", i)}
-                    style={({ pressed }) => [styles.removeBtn, pressed && { opacity: 0.85 }]}
-                  >
-                    <Text style={styles.removeText}>Remove</Text>
-                  </Pressable>
+          ) : (
+            <FlatList
+              data={items}
+              keyExtractor={(x) => x.conversation_id}
+              contentContainerStyle={styles.list}
+              renderItem={renderItem}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} />}
+              ListEmptyComponent={
+                <View style={styles.empty}>
+                  <Text style={styles.emptyTitle}>No conversations yet</Text>
+                  <Text style={styles.emptySub}>When customers message you, they’ll show up here.</Text>
                 </View>
-              ))}
-            </View>
+              }
+            />
           )}
-        </View>
-
-        {/* Stop & Escalate */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Stop & escalate</Text>
-          <Text style={styles.help}>Conditions that require stopping DIY + contacting a pro.</Text>
-
-          <TextInput
-            style={[styles.input, styles.multilineSm]}
-            value={stopDraft}
-            onChangeText={setStopDraft}
-            multiline
-            placeholder="e.g., Soft floor near electrical outlet…"
-            placeholderTextColor="rgba(255,255,255,0.35)"
-          />
-
-          <Pressable
-            onPress={() => addToList("stop")}
-            disabled={!canAddStop}
-            style={({ pressed }) => [
-              styles.smallBtn,
-              !canAddStop && styles.smallBtnDisabled,
-              pressed && canAddStop && { opacity: 0.92 },
-            ]}
-          >
-            <Text style={styles.smallBtnText}>Add stop condition</Text>
-          </Pressable>
-
-          {stop.length > 0 && (
-            <View style={{ marginTop: 10, gap: 10 }}>
-              {stop.map((st, i) => (
-                <View key={`${st}-${i}`} style={styles.itemCard}>
-                  <Text style={[styles.itemTitle, { flex: 1 }]}>{i + 1}. {st}</Text>
-                  <Pressable
-                    onPress={() => removeFromList("stop", i)}
-                    style={({ pressed }) => [styles.removeBtn, pressed && { opacity: 0.85 }]}
-                  >
-                    <Text style={styles.removeText}>Remove</Text>
-                  </Pressable>
-                </View>
-              ))}
-            </View>
-          )}
-        </View>
-
-        {/* Next Step */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Next step</Text>
-          <Text style={styles.help}>
-            What the customer should do if it still isn’t solved after these steps.
-          </Text>
-          <TextInput
-            style={[styles.input, styles.multiline]}
-            value={nextStep}
-            onChangeText={setNextStep}
-            multiline
-            placeholder="e.g., If the leak continues, request help and include photos of…"
-            placeholderTextColor="rgba(255,255,255,0.35)"
-          />
-        </View>
-
-        {/* Save */}
-        <Pressable
-          style={({ pressed }) => [
-            styles.saveBtn,
-            saving && { opacity: 0.6 },
-            pressed && !saving && { opacity: 0.92, transform: [{ scale: 0.99 }] },
-          ]}
-          disabled={saving}
-          onPress={save}
-        >
-          <Text style={styles.saveText}>{saving ? "Saving…" : "Save Article"}</Text>
-        </Pressable>
-
-        <View style={{ height: 20 }} />
-      </ScrollView>
+        </>
+      )}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#0B0F14" },
-  container: { padding: 16, gap: 12 },
 
-  pageTitle: { color: "white", fontSize: 22, fontWeight: "900" },
-  pageSub: { color: "rgba(255,255,255,0.6)", fontSize: 12, lineHeight: 17 },
+  header: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 6 },
+  title: { color: "white", fontSize: 20, fontWeight: "900" },
+  sub: { color: "rgba(255,255,255,0.65)", marginTop: 4 },
 
   card: {
-    borderRadius: 18,
+    margin: 16,
     padding: 14,
+    borderRadius: 18,
     backgroundColor: "rgba(255,255,255,0.06)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.10)",
     gap: 10,
   },
   cardTitle: { color: "white", fontSize: 15, fontWeight: "900" },
-
-  label: { color: "rgba(255,255,255,0.85)", fontSize: 12, fontWeight: "800" },
   help: { color: "rgba(255,255,255,0.55)", fontSize: 12, lineHeight: 16 },
 
   input: {
@@ -561,53 +320,66 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.10)",
     color: "white",
   },
-  multiline: { minHeight: 110, textAlignVertical: "top" },
-  multilineSm: { minHeight: 64, textAlignVertical: "top" },
 
-  row: { flexDirection: "row" },
-
-  smallBtn: {
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.10)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  smallBtnDisabled: { opacity: 0.35 },
-  smallBtnText: { color: "white", fontWeight: "900" },
-
-  itemCard: {
-    flexDirection: "row",
-    gap: 10,
-    alignItems: "flex-start",
-    padding: 12,
+  btn: {
+    height: 48,
     borderRadius: 16,
-    backgroundColor: "rgba(0,0,0,0.25)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
-  },
-  itemTitle: { color: "rgba(255,255,255,0.9)", fontWeight: "800", fontSize: 12, lineHeight: 16 },
-  itemMeta: { color: "rgba(255,255,255,0.65)", fontSize: 12, lineHeight: 16 },
-
-  removeBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderRadius: 12,
-    backgroundColor: "rgba(239,68,68,0.14)",
-    borderWidth: 1,
-    borderColor: "rgba(239,68,68,0.22)",
-  },
-  removeText: { color: "white", fontWeight: "900", fontSize: 12 },
-
-  saveBtn: {
-    height: 54,
-    borderRadius: 18,
     backgroundColor: "white",
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 6,
   },
-  saveText: { color: "#0B0F14", fontWeight: "900", fontSize: 15 },
+  btnDisabled: { opacity: 0.45 },
+  btnText: { color: "#0B0F14", fontWeight: "900" },
+
+  error: { color: "rgba(239,68,68,0.95)", fontWeight: "800" },
+
+  toolbar: { flexDirection: "row", gap: 10, paddingHorizontal: 16, paddingBottom: 10 },
+  toolbarBtn: {
+    height: 44,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  toolbarText: { color: "white", fontWeight: "900" },
+
+  errorBox: {
+    marginHorizontal: 16,
+    marginBottom: 10,
+    padding: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(239,68,68,0.35)",
+    backgroundColor: "rgba(239,68,68,0.12)",
+  },
+  errorText: { color: "white", fontWeight: "900" },
+
+  loading: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10 },
+  loadingText: { color: "rgba(255,255,255,0.75)", fontWeight: "800" },
+
+  list: { paddingHorizontal: 16, paddingBottom: 20 },
+
+  row: {
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    borderRadius: 18,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 10,
+  },
+  rowTitle: { color: "white", fontWeight: "900" },
+  rowSub: { color: "rgba(255,255,255,0.70)", lineHeight: 18 },
+  rowMeta: { color: "rgba(255,255,255,0.45)", fontSize: 12, fontWeight: "700" },
+  chev: { color: "rgba(255,255,255,0.55)", fontSize: 26, fontWeight: "900" },
+
+  empty: { padding: 24, alignItems: "center", gap: 8 },
+  emptyTitle: { color: "white", fontWeight: "900", fontSize: 16 },
+  emptySub: { color: "rgba(255,255,255,0.65)", textAlign: "center" },
 });

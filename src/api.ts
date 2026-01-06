@@ -32,17 +32,26 @@ async function http<T>(
 // ----------------------------
 // Sessions
 // ----------------------------
-export async function getOrCreateSession(opts?: { resetOld?: boolean; deleteOldMessages?: boolean }) {
+// Supports BOTH styles:
+// - getOrCreateSession({ forceNew: true })   ✅ what your chat.tsx uses
+// - getOrCreateSession({ resetOld: true })   ✅ older style
+export async function getOrCreateSession(opts?: {
+  forceNew?: boolean;
+  resetOld?: boolean;
+  deleteOldMessages?: boolean;
+}) {
   const existing = await AsyncStorage.getItem(SESSION_KEY);
 
-  // Optional: rotate session
-  if (opts?.resetOld) {
+  const shouldReset = !!(opts?.forceNew || opts?.resetOld);
+
+  // Rotate session (optional)
+  if (shouldReset) {
     const data = await http<CreateSessionResponse>("/v1/sessions", {
       body: {
         channel: "mobile",
         mode: "customer",
         ...(existing ? { reset_old_session_id: existing } : {}),
-        delete_old_messages: opts.deleteOldMessages ?? true,
+        delete_old_messages: opts?.deleteOldMessages ?? true,
       },
     });
     await AsyncStorage.setItem(SESSION_KEY, data.session_id);
@@ -70,7 +79,10 @@ export async function getOrCreateSession(opts?: { resetOld?: boolean; deleteOldM
 /**
  * ✅ 422 FIX: Do NOT send nulls. Only include fields when they have real values.
  */
-export async function setContext(sessionId: string, ctx: { airstream_year?: number; category?: string }) {
+export async function setContext(
+  sessionId: string,
+  ctx: { airstream_year?: number; category?: string }
+) {
   const body: any = {};
 
   if (typeof ctx.airstream_year === "number" && Number.isFinite(ctx.airstream_year)) {
@@ -84,16 +96,23 @@ export async function setContext(sessionId: string, ctx: { airstream_year?: numb
 }
 
 /**
- * ✅ 422 FIX: Do NOT send nulls. Only include airstream_year if you have it.
+ * ✅ Back to the signature your chat.tsx expects:
+ * sendChat(sessionId, message, airstreamYear?)
+ *
+ * ✅ Also keeps the "don’t send nulls" behavior.
  */
-export async function sendChat(params: { sessionId: string; message: string; airstreamYear?: number }) {
+export async function sendChat(
+  sessionId: string,
+  message: string,
+  airstreamYear?: number
+) {
   const body: any = {
-    session_id: params.sessionId,
-    message: params.message,
+    session_id: sessionId,
+    message,
   };
 
-  if (typeof params.airstreamYear === "number" && Number.isFinite(params.airstreamYear)) {
-    body.airstream_year = params.airstreamYear;
+  if (typeof airstreamYear === "number" && Number.isFinite(airstreamYear)) {
+    body.airstream_year = airstreamYear;
   }
 
   return await http<ChatResponse>("/v1/chat", { body });

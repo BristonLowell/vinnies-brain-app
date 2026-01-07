@@ -80,7 +80,7 @@ export default function AdminChat() {
         setAiError("");
         setAiLoading(true);
 
-        const r = await fetch(`${API_BASE_URL}/v1/admin/ai-history/${customerId}`, {
+        const r = await fetch(`${API_BASE_URL}/admin/ai-history/${customerId}`, {
           headers: { "X-Admin-Key": key },
         });
         if (!r.ok) throw new Error(await r.text());

@@ -17,14 +17,10 @@ import { useRouter } from "expo-router";
 import { API_BASE_URL } from "../src/config";
 
 const ADMIN_KEY_STORAGE = "vinnies_admin_key";
-const ADMIN_DRAFT_STORAGE = "vinnies_admin_article_draft_v1";
 
-function linesToArray(s: string) {
-  return (s || "")
-    .split("\n")
-    .map((x) => x.trim())
-    .filter(Boolean);
-}
+// ✅ New draft key (v2). We'll still try to restore the old v1 too.
+const ADMIN_DRAFT_STORAGE_V2 = "vinnies_admin_article_draft_v2";
+const ADMIN_DRAFT_STORAGE_V1 = "vinnies_admin_article_draft_v1";
 
 function safeJsonParse(s: string) {
   const t = (s || "").trim();
@@ -35,43 +31,6 @@ function safeJsonParse(s: string) {
 function formatJsonOrThrow(s: string) {
   const obj = JSON.parse(s);
   return JSON.stringify(obj, null, 2);
-}
-
-function buildAutoRetrievalText(input: {
-  title: string;
-  category: string;
-  severity: string;
-  years_min: number;
-  years_max: number;
-  customer_summary: string;
-  clarifying_questions: any;
-  steps: any;
-  model_year_notes: any;
-  stop_and_escalate: any;
-  next_step: string;
-  decision_tree: any;
-}) {
-  const parts: string[] = [];
-  parts.push(`Title: ${input.title}`);
-  parts.push(`Category: ${input.category}`);
-  parts.push(`Severity: ${input.severity}`);
-  parts.push(`Years: ${input.years_min}-${input.years_max}`);
-  parts.push(`Customer Summary: ${input.customer_summary}`);
-
-  if (input.next_step?.trim()) parts.push(`Next Step: ${input.next_step.trim()}`);
-
-  if (input.clarifying_questions && Array.isArray(input.clarifying_questions)) {
-    parts.push(`Clarifying Questions: ${input.clarifying_questions.join(" | ")}`);
-  } else if (input.clarifying_questions) {
-    parts.push(`Clarifying Questions (json): ${JSON.stringify(input.clarifying_questions)}`);
-  }
-
-  if (input.steps) parts.push(`Steps: ${JSON.stringify(input.steps)}`);
-  if (input.model_year_notes) parts.push(`Model Year Notes: ${JSON.stringify(input.model_year_notes)}`);
-  if (input.stop_and_escalate) parts.push(`Stop and Escalate: ${JSON.stringify(input.stop_and_escalate)}`);
-  if (input.decision_tree) parts.push(`Decision Tree: ${JSON.stringify(input.decision_tree)}`);
-
-  return parts.join("\n");
 }
 
 /**
@@ -272,7 +231,6 @@ function PreviewRunModal(props: {
       return;
     }
 
-    // normal node
     if (!idToIndex.has(goto)) {
       setCurrent({ kind: "end", end: "end_not_applicable" });
       return;
@@ -385,6 +343,112 @@ function PreviewRunModal(props: {
   );
 }
 
+/**
+ * ✅ Frontend-only derivation (preview only).
+ * Backend is canonical; this is just so the admin can *see* what will be generated.
+ */
+function derivePreviewFromDecisionTree(tree: any): {
+  clarifying_questions: string[];
+  steps: string[];
+  next_step: string | null;
+} {
+  if (!tree || typeof tree !== "object") return { clarifying_questions: [], steps: [], next_step: null };
+  const nodes = tree.nodes;
+  const start = tree.start;
+
+  if (!nodes || typeof nodes !== "object" || !start || typeof start !== "string" || !nodes[start]) {
+    return { clarifying_questions: [], steps: [], next_step: null };
+  }
+
+  function nodeText(n: any) {
+    const title = String(n?.title || "").trim();
+    const body = String(n?.body || "").trim();
+    if (title && body) return `${title} — ${body}`;
+    return title || body;
+  }
+
+  const root = nodes[start];
+  const rootQ = nodeText(root);
+  const clarifying_questions = rootQ ? [rootQ] : [];
+
+  // BFS reachable nodes for steps preview
+  const steps: string[] = [];
+  const visited = new Set<string>();
+  const q: string[] = [start];
+
+  while (q.length) {
+    const id = q.shift()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+
+    const n = nodes[id];
+    const t = nodeText(n);
+    if (t) steps.push(t);
+
+    const opts = Array.isArray(n?.options) ? n.options : [];
+    for (const o of opts) {
+      const goto = String(o?.goto || "").trim();
+      if (!goto) continue;
+      if (goto === "end_done" || goto === "end_escalate" || goto === "end_not_applicable") continue;
+      if (nodes[goto] && !visited.has(goto)) q.push(goto);
+    }
+  }
+
+  // next_step preview based on any end_escalate / end_done present
+  let sawEscalate = false;
+  let sawDone = false;
+
+  for (const key of Object.keys(nodes)) {
+    const n = nodes[key];
+    const opts = Array.isArray(n?.options) ? n.options : [];
+    for (const o of opts) {
+      const goto = String(o?.goto || "").trim();
+      if (goto === "end_escalate") sawEscalate = true;
+      if (goto === "end_done") sawDone = true;
+    }
+  }
+
+  const next_step = sawEscalate ? "request_help" : sawDone ? "issue_resolved" : null;
+
+  return { clarifying_questions, steps, next_step };
+}
+
+function buildAutoRetrievalText(input: {
+  title: string;
+  category: string;
+  severity: string;
+  years_min: number;
+  years_max: number;
+  customer_summary: string;
+  model_year_notes: any;
+  stop_and_escalate: any;
+  decision_tree: any;
+  derived: { clarifying_questions: string[]; steps: string[]; next_step: string | null };
+}) {
+  const parts: string[] = [];
+  parts.push(`Title: ${input.title}`);
+  parts.push(`Category: ${input.category}`);
+  parts.push(`Severity: ${input.severity}`);
+  parts.push(`Years: ${input.years_min}-${input.years_max}`);
+  parts.push(`Customer Summary: ${input.customer_summary}`);
+
+  if (input.derived.next_step) parts.push(`Next Step: ${input.derived.next_step}`);
+
+  if (input.derived.clarifying_questions?.length) {
+    parts.push(`Clarifying Questions: ${input.derived.clarifying_questions.join(" | ")}`);
+  }
+
+  if (input.derived.steps?.length) {
+    parts.push(`Steps: ${input.derived.steps.join(" | ")}`);
+  }
+
+  if (input.model_year_notes) parts.push(`Model Year Notes: ${JSON.stringify(input.model_year_notes)}`);
+  if (input.stop_and_escalate) parts.push(`Stop and Escalate: ${JSON.stringify(input.stop_and_escalate)}`);
+  if (input.decision_tree) parts.push(`Decision Tree: ${JSON.stringify(input.decision_tree)}`);
+
+  return parts.join("\n");
+}
+
 export default function Admin() {
   const router = useRouter();
 
@@ -398,16 +462,11 @@ export default function Admin() {
   const [yearsMax, setYearsMax] = useState("2025");
   const [customerSummary, setCustomerSummary] = useState("");
 
-  // jsonb fields
-  const [clarifyingQuestionsText, setClarifyingQuestionsText] = useState("");
-  const [stepsMode, setStepsMode] = useState<"lines" | "json">("lines");
-  const [stepsLinesText, setStepsLinesText] = useState("");
-  const [stepsJsonText, setStepsJsonText] = useState("");
+  // jsonb fields we still author
   const [modelYearNotesJson, setModelYearNotesJson] = useState("");
   const [stopAndEscalateJson, setStopAndEscalateJson] = useState("");
 
-  // next_step + retrieval_text
-  const [nextStep, setNextStep] = useState("");
+  // retrieval_text
   const [retrievalAuto, setRetrievalAuto] = useState(true);
   const [retrievalText, setRetrievalText] = useState("");
 
@@ -435,6 +494,9 @@ export default function Admin() {
 
   // Preview Run modal
   const [previewOpen, setPreviewOpen] = useState(false);
+
+  // Derived preview collapsible
+  const [derivedOpen, setDerivedOpen] = useState(true);
 
   const [submitting, setSubmitting] = useState(false);
 
@@ -523,6 +585,27 @@ export default function Admin() {
     setDecisionTreeJson(JSON.stringify(buildDecisionTreeJson(dtNodes, startId), null, 2));
   }, [dtEnabled, dtNodes, startId]);
 
+  // Derived preview (from current tree JSON)
+  const derivedPreview = useMemo(() => {
+    let tree: any = null;
+
+    if (dtEnabled) {
+      if (!dtNodes.length || !startId) return { clarifying_questions: [], steps: [], next_step: null };
+      const err = validateDecisionTree(dtNodes, startId);
+      if (err) return { clarifying_questions: [], steps: [], next_step: null };
+      tree = buildDecisionTreeJson(dtNodes, startId);
+    } else {
+      if (!decisionTreeJson.trim()) return { clarifying_questions: [], steps: [], next_step: null };
+      try {
+        tree = safeJsonParse(decisionTreeJson);
+      } catch {
+        return { clarifying_questions: [], steps: [], next_step: null };
+      }
+    }
+
+    return derivePreviewFromDecisionTree(tree);
+  }, [dtEnabled, dtNodes, startId, decisionTreeJson]);
+
   // Autosave draft (debounced)
   useEffect(() => {
     if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
@@ -530,27 +613,27 @@ export default function Admin() {
     draftSaveTimer.current = setTimeout(async () => {
       try {
         const draft = {
-          v: 1,
+          v: 2,
           title,
           category,
           severity,
           yearsMin,
           yearsMax,
           customerSummary,
-          clarifyingQuestionsText,
-          stepsMode,
-          stepsLinesText,
-          stepsJsonText,
+
           modelYearNotesJson,
           stopAndEscalateJson,
-          nextStep,
+
           retrievalAuto,
           retrievalText,
+
           decisionTreeJson,
           dtEnabled,
           dtNodes,
+
+          derivedOpen,
         };
-        await AsyncStorage.setItem(ADMIN_DRAFT_STORAGE, JSON.stringify(draft));
+        await AsyncStorage.setItem(ADMIN_DRAFT_STORAGE_V2, JSON.stringify(draft));
         setDraftStatus("saved");
       } catch {
         // ignore draft errors silently (never block admin)
@@ -568,27 +651,29 @@ export default function Admin() {
     yearsMin,
     yearsMax,
     customerSummary,
-    clarifyingQuestionsText,
-    stepsMode,
-    stepsLinesText,
-    stepsJsonText,
     modelYearNotesJson,
     stopAndEscalateJson,
-    nextStep,
     retrievalAuto,
     retrievalText,
     decisionTreeJson,
     dtEnabled,
     dtNodes,
+    derivedOpen,
   ]);
 
   async function restoreDraft() {
     try {
-      const raw = await AsyncStorage.getItem(ADMIN_DRAFT_STORAGE);
+      // Try v2 first
+      let raw = await AsyncStorage.getItem(ADMIN_DRAFT_STORAGE_V2);
+
+      // Fallback to v1
+      if (!raw) raw = await AsyncStorage.getItem(ADMIN_DRAFT_STORAGE_V1);
+
       if (!raw) {
         Alert.alert("No Draft Found", "There isn’t a saved draft on this device.");
         return;
       }
+
       const d = JSON.parse(raw);
 
       setTitle(d.title ?? "");
@@ -598,23 +683,18 @@ export default function Admin() {
       setYearsMax(String(d.yearsMax ?? "2025"));
       setCustomerSummary(d.customerSummary ?? "");
 
-      setClarifyingQuestionsText(d.clarifyingQuestionsText ?? "");
-      setStepsMode(d.stepsMode === "json" ? "json" : "lines");
-      setStepsLinesText(d.stepsLinesText ?? "");
-      setStepsJsonText(d.stepsJsonText ?? "");
-
       setModelYearNotesJson(d.modelYearNotesJson ?? "");
       setStopAndEscalateJson(d.stopAndEscalateJson ?? "");
 
-      setNextStep(d.nextStep ?? "");
-
-      setRetrievalAuto(!!d.retrievalAuto);
+      setRetrievalAuto(d.retrievalAuto !== false);
       setRetrievalText(d.retrievalText ?? "");
 
       setDtEnabled(d.dtEnabled !== false);
       if (Array.isArray(d.dtNodes) && d.dtNodes.length) setDtNodes(d.dtNodes);
 
       setDecisionTreeJson(d.decisionTreeJson ?? "");
+
+      setDerivedOpen(d.derivedOpen !== false);
 
       setDraftStatus("restored");
       Alert.alert("Draft Restored", "Loaded your last in-progress draft from this device.");
@@ -624,7 +704,8 @@ export default function Admin() {
   }
 
   async function clearDraft() {
-    await AsyncStorage.removeItem(ADMIN_DRAFT_STORAGE);
+    await AsyncStorage.removeItem(ADMIN_DRAFT_STORAGE_V2);
+    await AsyncStorage.removeItem(ADMIN_DRAFT_STORAGE_V1);
     setDraftStatus("idle");
     Alert.alert("Draft Cleared", "Saved draft removed from this device.");
   }
@@ -640,7 +721,6 @@ export default function Admin() {
 
     if (!customerSummary.trim()) return false;
 
-    // If builder on, ensure tree valid before enabling submit
     if (dtEnabled && dtValidationError) return false;
 
     return true;
@@ -659,14 +739,9 @@ export default function Admin() {
     setYearsMax("2025");
     setCustomerSummary("");
 
-    setClarifyingQuestionsText("");
-    setStepsMode("lines");
-    setStepsLinesText("");
-    setStepsJsonText("");
     setModelYearNotesJson("");
     setStopAndEscalateJson("");
 
-    setNextStep("");
     setRetrievalAuto(true);
     setRetrievalText("");
 
@@ -794,40 +869,21 @@ export default function Admin() {
       const ymin = Number(yearsMin);
       const ymax = Number(yearsMax);
 
+      // decision_tree payload
       let decisionTree: any = null;
-      if (decisionTreeJson.trim()) {
-        try {
-          decisionTree = safeJsonParse(decisionTreeJson);
-        } catch {
-          Alert.alert("Decision Tree JSON invalid", "Fix the JSON or clear the field.");
-          return;
-        }
-      }
-
       if (dtEnabled) {
         const err = validateDecisionTree(dtNodes, startId);
         if (err) {
           Alert.alert("Decision Tree Builder", err);
           return;
         }
-      }
-
-      const clarifyingQuestions = linesToArray(clarifyingQuestionsText);
-
-      let steps: any = null;
-      if (stepsMode === "lines") {
-        const arr = linesToArray(stepsLinesText);
-        steps = arr.length ? arr : null;
-      } else {
-        if (stepsJsonText.trim()) {
-          try {
-            steps = safeJsonParse(stepsJsonText);
-          } catch {
-            Alert.alert("Steps JSON invalid", "Fix the JSON in Steps (JSON mode) or switch to list mode.");
-            return;
-          }
-        } else {
-          steps = null;
+        decisionTree = buildDecisionTreeJson(dtNodes, startId);
+      } else if (decisionTreeJson.trim()) {
+        try {
+          decisionTree = safeJsonParse(decisionTreeJson);
+        } catch {
+          Alert.alert("Decision Tree JSON invalid", "Fix the JSON or clear the field.");
+          return;
         }
       }
 
@@ -851,6 +907,9 @@ export default function Admin() {
         }
       }
 
+      // Derived preview (for retrieval auto text)
+      const derived = decisionTree ? derivePreviewFromDecisionTree(decisionTree) : derivedPreview;
+
       const tempForAuto = {
         title: title.trim(),
         category: category.trim(),
@@ -858,30 +917,27 @@ export default function Admin() {
         years_min: ymin,
         years_max: ymax,
         customer_summary: customerSummary.trim(),
-        clarifying_questions: clarifyingQuestions,
-        steps,
         model_year_notes: modelYearNotes,
         stop_and_escalate: stopAndEscalate,
-        next_step: nextStep.trim(),
         decision_tree: decisionTree,
+        derived,
       };
 
       const finalRetrievalText = retrievalAuto
         ? buildAutoRetrievalText(tempForAuto)
         : (retrievalText || "").trim() || null;
 
-      const payload = {
+      // ✅ We do NOT send clarifying_questions/steps/next_step anymore.
+      // Backend derives them from decision_tree and stores them.
+      const payload: any = {
         title: title.trim(),
         category: category.trim(),
         severity: severity.trim(),
         years_min: ymin,
         years_max: ymax,
         customer_summary: customerSummary.trim(),
-        clarifying_questions: clarifyingQuestions,
-        steps: steps,
         model_year_notes: modelYearNotes,
         stop_and_escalate: stopAndEscalate,
-        next_step: nextStep.trim() || null,
         retrieval_text: finalRetrievalText,
         decision_tree: decisionTree,
       };
@@ -898,7 +954,7 @@ export default function Admin() {
       const text = await r.text();
       if (!r.ok) throw new Error(text || `Request failed (${r.status})`);
 
-      Alert.alert("Success", "Article saved.");
+      Alert.alert("Success", "Article saved. (Tree-derived fields were generated automatically.)");
       clearForm();
     } catch (e: any) {
       Alert.alert("Error", String(e?.message ?? e));
@@ -913,9 +969,7 @@ export default function Admin() {
         visible={selectOpen.visible}
         title={`Select destination for ${selectOpen.which}`}
         options={gotoOptions}
-        selectedValue={
-          dtNodes[selectOpen.nodeIndex] ? getGoto(dtNodes[selectOpen.nodeIndex], selectOpen.which) : undefined
-        }
+        selectedValue={dtNodes[selectOpen.nodeIndex] ? getGoto(dtNodes[selectOpen.nodeIndex], selectOpen.which) : undefined}
         onClose={() => setSelectOpen((s) => ({ ...s, visible: false }))}
         onSelect={(value) => {
           setYesNoGoto(selectOpen.nodeIndex, selectOpen.which, value);
@@ -934,7 +988,7 @@ export default function Admin() {
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
           <Text style={styles.title}>Admin</Text>
-          <Text style={styles.sub}>Create troubleshooting articles (schema-aligned).</Text>
+          <Text style={styles.sub}>Create troubleshooting articles (decision_tree is the source of truth).</Text>
 
           <View style={styles.headerBtns}>
             <Pressable style={styles.smallBtn} onPress={() => router.push("/admin-inbox")}>
@@ -980,7 +1034,7 @@ export default function Admin() {
 
         {/* Article */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Article (Database Schema Fields)</Text>
+          <Text style={styles.cardTitle}>Article (Schema Fields)</Text>
 
           <Text style={styles.label}>Title</Text>
           <TextInput
@@ -1049,76 +1103,59 @@ export default function Admin() {
             placeholderTextColor="rgba(255,255,255,0.35)"
           />
 
-          {/* Clarifying Questions */}
-          <View style={styles.hr} />
-          <Text style={styles.cardTitle}>clarifying_questions (jsonb)</Text>
-          <Text style={styles.hint2}>One question per line. Saved as JSON array.</Text>
-          <TextInput
-            value={clarifyingQuestionsText}
-            onChangeText={setClarifyingQuestionsText}
-            style={[styles.input, styles.textArea]}
-            multiline
-            placeholder={"Is the pump running?\nIs the tank filled?\nAny air spurting at faucet?"}
-            placeholderTextColor="rgba(255,255,255,0.35)"
-          />
-
-          {/* Steps */}
+          {/* ✅ Derived fields preview (NOT authored) */}
           <View style={styles.hr} />
           <View style={styles.rowBetween}>
-            <Text style={styles.cardTitle}>steps (jsonb)</Text>
-            <View style={{ flexDirection: "row", gap: 8 }}>
-              <Pressable
-                style={[styles.smallBtn, stepsMode === "lines" ? styles.smallBtnOn : null]}
-                onPress={() => setStepsMode("lines")}
-              >
-                <Text style={styles.smallBtnText}>List Mode</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.smallBtn, stepsMode === "json" ? styles.smallBtnOn : null]}
-                onPress={() => setStepsMode("json")}
-              >
-                <Text style={styles.smallBtnText}>JSON Mode</Text>
-              </Pressable>
-            </View>
+            <Text style={styles.cardTitle}>Auto-generated from decision_tree</Text>
+            <Pressable style={[styles.smallBtn, derivedOpen ? styles.smallBtnOn : null]} onPress={() => setDerivedOpen((v) => !v)}>
+              <Text style={styles.smallBtnText}>{derivedOpen ? "Preview: ON" : "Preview: OFF"}</Text>
+            </Pressable>
           </View>
 
-          {stepsMode === "lines" ? (
-            <TextInput
-              value={stepsLinesText}
-              onChangeText={setStepsLinesText}
-              style={[styles.input, styles.textArea]}
-              multiline
-              placeholder={"Verify water in tank\nCheck pump strainer\nPrime the pump"}
-              placeholderTextColor="rgba(255,255,255,0.35)"
-            />
-          ) : (
-            <>
-              <TextInput
-                value={stepsJsonText}
-                onChangeText={setStepsJsonText}
-                style={[styles.input, styles.jsonArea]}
-                multiline
-                autoCapitalize="none"
-                placeholder={`[
-  "Verify water in tank",
-  "Check pump strainer",
-  "Prime pump"
-]`}
-                placeholderTextColor="rgba(255,255,255,0.35)"
-              />
-              <View style={styles.row}>
-                <Pressable style={[styles.btn, styles.btnDark]} onPress={() => pressFormatJson("Steps", stepsJsonText, setStepsJsonText)}>
-                  <Text style={[styles.btnText, styles.btnDarkText]}>Format Steps JSON</Text>
-                </Pressable>
-              </View>
-            </>
+          <Text style={styles.hint2}>
+            You no longer fill out <Text style={{ fontWeight: "900", color: "rgba(255,255,255,0.85)" }}>clarifying_questions</Text>,{" "}
+            <Text style={{ fontWeight: "900", color: "rgba(255,255,255,0.85)" }}>steps</Text>, or{" "}
+            <Text style={{ fontWeight: "900", color: "rgba(255,255,255,0.85)" }}>next_step</Text>. The backend generates them automatically.
+          </Text>
+
+          {derivedOpen && (
+            <View style={styles.previewBox}>
+              <Text style={styles.previewLabel}>clarifying_questions</Text>
+              <Text style={styles.previewValue}>
+                {derivedPreview.clarifying_questions.length ? derivedPreview.clarifying_questions[0] : "—"}
+              </Text>
+
+              <View style={{ height: 8 }} />
+
+              <Text style={styles.previewLabel}>steps (flattened)</Text>
+              {derivedPreview.steps.length ? (
+                derivedPreview.steps.slice(0, 8).map((s, i) => (
+                  <Text key={`${i}-${s}`} style={styles.previewLine2}>
+                    {i + 1}. {s}
+                  </Text>
+                ))
+              ) : (
+                <Text style={styles.previewValue}>—</Text>
+              )}
+              {derivedPreview.steps.length > 8 && (
+                <Text style={styles.hint2}>Showing first 8 steps (saved version includes all reachable steps).</Text>
+              )}
+
+              <View style={{ height: 8 }} />
+
+              <Text style={styles.previewLabel}>next_step</Text>
+              <Text style={styles.previewValue}>{derivedPreview.next_step || "—"}</Text>
+            </View>
           )}
 
           {/* model_year_notes */}
           <View style={styles.hr} />
           <View style={styles.rowBetween}>
             <Text style={styles.cardTitle}>model_year_notes (jsonb)</Text>
-            <Pressable style={styles.smallBtn} onPress={() => pressFormatJson("Model Year Notes", modelYearNotesJson, setModelYearNotesJson)}>
+            <Pressable
+              style={styles.smallBtn}
+              onPress={() => pressFormatJson("Model Year Notes", modelYearNotesJson, setModelYearNotesJson)}
+            >
               <Text style={styles.smallBtnText}>Format JSON</Text>
             </Pressable>
           </View>
@@ -1139,7 +1176,10 @@ export default function Admin() {
           <View style={styles.hr} />
           <View style={styles.rowBetween}>
             <Text style={styles.cardTitle}>stop_and_escalate (jsonb)</Text>
-            <Pressable style={styles.smallBtn} onPress={() => pressFormatJson("Stop & Escalate", stopAndEscalateJson, setStopAndEscalateJson)}>
+            <Pressable
+              style={styles.smallBtn}
+              onPress={() => pressFormatJson("Stop & Escalate", stopAndEscalateJson, setStopAndEscalateJson)}
+            >
               <Text style={styles.smallBtnText}>Format JSON</Text>
             </Pressable>
           </View>
@@ -1156,18 +1196,6 @@ export default function Admin() {
   ]
 }`}
             placeholderTextColor="rgba(255,255,255,0.35)"
-          />
-
-          {/* next_step */}
-          <View style={styles.hr} />
-          <Text style={styles.cardTitle}>next_step (text)</Text>
-          <TextInput
-            value={nextStep}
-            onChangeText={setNextStep}
-            style={styles.input}
-            placeholder="Ex: check_strainer"
-            placeholderTextColor="rgba(255,255,255,0.35)"
-            autoCapitalize="none"
           />
 
           {/* retrieval_text */}
@@ -1330,7 +1358,9 @@ export default function Admin() {
 
               <View style={styles.row}>
                 <Pressable style={[styles.btn, styles.btnDark]} onPress={applyBuilderToJsonNow} disabled={!!dtValidationError}>
-                  <Text style={[styles.btnText, styles.btnDarkText]}>{dtValidationError ? "Fix tree to generate" : "Generate JSON Now"}</Text>
+                  <Text style={[styles.btnText, styles.btnDarkText]}>
+                    {dtValidationError ? "Fix tree to generate" : "Generate JSON Now"}
+                  </Text>
                 </Pressable>
               </View>
             </View>
@@ -1362,7 +1392,11 @@ export default function Admin() {
 
           {/* Submit */}
           <View style={styles.row}>
-            <Pressable style={[styles.btn, (!canSubmit || submitting) && styles.btnDisabled]} disabled={!canSubmit || submitting} onPress={submit}>
+            <Pressable
+              style={[styles.btn, (!canSubmit || submitting) && styles.btnDisabled]}
+              disabled={!canSubmit || submitting}
+              onPress={submit}
+            >
               <Text style={styles.btnText}>{submitting ? "Saving…" : "Save Article"}</Text>
             </Pressable>
 
@@ -1513,6 +1547,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
   },
+
+  // derived preview styles
+  previewLabel: { color: "rgba(255,255,255,0.65)", fontWeight: "900", fontSize: 12 },
+  previewValue: { color: "rgba(255,255,255,0.88)", fontWeight: "800", lineHeight: 18 },
+  previewLine2: { color: "rgba(255,255,255,0.85)", fontWeight: "700", lineHeight: 18 },
 
   nodeCard: {
     marginTop: 12,

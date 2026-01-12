@@ -10,6 +10,7 @@ import {
   Platform,
   ActivityIndicator,
   InteractionManager,
+  Keyboard,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -30,7 +31,7 @@ type AiMsg = {
 };
 
 const INPUT_BAR_EST_HEIGHT = 76;
-const IOS_KEYBOARD_OFFSET = 90;
+const IOS_KEYBOARD_OFFSET = 120; // ⬅️ raised so input sits higher on iOS
 
 function fmt(ts?: string) {
   if (!ts) return "";
@@ -45,6 +46,8 @@ export default function AdminChat() {
 
   const conversationId = String(params.conversation_id || "");
   const customerId = String(params.customer_id || ""); // this is your session_id
+
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
 
   const [adminKey, setAdminKey] = useState("");
   const [loading, setLoading] = useState(true);
@@ -61,6 +64,15 @@ export default function AdminChat() {
   const listRef = useRef<FlatList<Msg>>(null);
   const pollRef = useRef<any>(null);
   const lastSigRef = useRef<string>("");
+
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardOpen(true));
+    const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardOpen(false));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
 
   const scrollToBottom = useCallback(() => {
     InteractionManager.runAfterInteractions(() => {
@@ -273,7 +285,7 @@ export default function AdminChat() {
           />
         )}
 
-        <View style={styles.inputWrap}>
+        <View style={[styles.inputWrap, keyboardOpen && Platform.OS === "ios" ? { paddingBottom: 28 } : null]}>
           <TextInput
             value={text}
             onChangeText={setText}

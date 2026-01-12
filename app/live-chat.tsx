@@ -10,6 +10,7 @@ import {
   Platform,
   InteractionManager,
   ActivityIndicator,
+  Keyboard,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { getOrCreateSession, liveChatHistory, liveChatSend } from "../src/api";
@@ -23,9 +24,11 @@ type Msg = {
 };
 
 const INPUT_BAR_EST_HEIGHT = 76; // gives the list breathing room above the input
-const IOS_KEYBOARD_OFFSET = 90; // adjust if you have a taller header/nav
+const IOS_KEYBOARD_OFFSET = 120; // ⬅️ raised so input sits higher on iOS
 
 export default function LiveChat() {
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+
   const [sessionId, setSessionId] = useState<string>("");
   const [conversationId, setConversationId] = useState<string>("");
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -37,6 +40,15 @@ export default function LiveChat() {
   const listRef = useRef<FlatList<Msg>>(null);
   const pollTimerRef = useRef<any>(null);
   const lastSigRef = useRef<string>("");
+
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardOpen(true));
+    const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardOpen(false));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
 
   const scrollToBottom = useCallback(() => {
     InteractionManager.runAfterInteractions(() => {
@@ -179,7 +191,7 @@ export default function LiveChat() {
           />
         )}
 
-        <View style={styles.inputWrap}>
+        <View style={[styles.inputWrap, keyboardOpen && Platform.OS === "ios" ? { paddingBottom: 28 } : null]}>
           <TextInput
             value={text}
             onChangeText={setText}

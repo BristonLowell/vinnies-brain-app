@@ -21,10 +21,9 @@ type ChatItem = {
   role: "user" | "assistant";
   text: string;
   meta?: {
-    // Removed sources from UI, but leaving optional in case you still want it in data
     usedArticles?: { id: string; title: string }[];
     showEscalation?: boolean;
-    clarifyingQuestion?: string; // NEW: show this bold at top of AI response
+    clarifyingQuestion?: string; // show this bold at top of AI response
   };
 };
 
@@ -54,10 +53,31 @@ function isLiveChatHours(): boolean {
   return isWeekday && isBusinessHours;
 }
 
+// Banner text your backend prepends when no KB article is found
+const NOT_FROM_VINNIES_PREFIX = "⚠️ This information is NOT from Vinnies";
+
+function parseNonVinniesBanner(text: string): { hasBanner: boolean; body: string } {
+  const raw = (text ?? "").trimStart();
+  if (!raw.startsWith(NOT_FROM_VINNIES_PREFIX)) {
+    return { hasBanner: false, body: text };
+  }
+
+  // Remove the first line (banner) and any following blank line
+  const lines = raw.split("\n");
+  // Drop first line
+  lines.shift();
+  // Drop a leading blank line if present
+  while (lines.length > 0 && lines[0].trim() === "") lines.shift();
+
+  return { hasBanner: true, body: lines.join("\n") };
+}
+
 export default function Chat() {
   const router = useRouter();
   const params = useLocalSearchParams<{ year?: string; category?: string }>();
   const year = params.year ? Number(params.year) : undefined;
+
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
 
   const [sessionId, setSessionId] = useState("");
   const [items, setItems] = useState<ChatItem[]>([INITIAL_ASSISTANT]);
@@ -71,6 +91,15 @@ export default function Chat() {
 
   const lastResetAt = useRef(0);
   const didIgnoreFirstActive = useRef(false);
+
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardOpen(true));
+    const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardOpen(false));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
 
   const resetConversation = useCallback(async () => {
     const now = Date.now();
@@ -138,7 +167,6 @@ export default function Chat() {
 
       const res = await sendChat(sid, message, year);
 
-      // Keep parsing used_articles (harmless), but we will NOT render it.
       const usedArticles = Array.isArray(res.used_articles)
         ? res.used_articles.map((a: any) => ({ id: a.id, title: a.title }))
         : [];
@@ -156,7 +184,7 @@ export default function Chat() {
           meta: {
             usedArticles,
             showEscalation: !!res.show_escalation,
-            clarifyingQuestion, // NEW
+            clarifyingQuestion,
           },
         },
       ]);
@@ -193,7 +221,7 @@ export default function Chat() {
       <KeyboardAvoidingView
         style={styles.safe}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 88 : 0}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 120 : 0}
       >
         <Pressable onPress={Keyboard.dismiss} style={StyleSheet.absoluteFill} pointerEvents="box-none">
           <View style={StyleSheet.absoluteFill} pointerEvents="none" />
@@ -212,6 +240,8 @@ export default function Chat() {
             const isUser = item.role === "user";
             const cq = item.meta?.clarifyingQuestion?.trim();
 
+            const parsed = !isUser ? parseNonVinniesBanner(item.text) : { hasBanner: false, body: item.text };
+
             return (
               <View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
                 {!isUser && (
@@ -221,14 +251,19 @@ export default function Chat() {
                 )}
 
                 <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
-                  {/* NEW: bold clarifying question at top of AI response */}
+                  {/* Banner if not from KB */}
+                  {!isUser && parsed.hasBanner && (
+                    <View style={styles.notFromVinniesBanner}>
+                      <Text style={styles.notFromVinniesText}>
+                        ⚠️ This information is NOT from Vinnies Brain’s database.
+                      </Text>
+                    </View>
+                  )}
+
+                  {/* Bold clarifying question at top of AI response */}
                   {!isUser && !!cq && <Text style={styles.clarifyingQuestion}>{cq}</Text>}
 
-                  <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>
-                    {item.text}
-                  </Text>
-
-                  {/* REMOVED: Sources used section */}
+                  <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>{parsed.body}</Text>
                 </View>
               </View>
             );
@@ -271,24 +306,21 @@ export default function Chat() {
         {showEscalate && (
           <Pressable
             style={({ pressed }) => [styles.escalate, pressed && { opacity: 0.9, transform: [{ scale: 0.99 }] }]}
-            // onPress={() => {
-            //   if (isLiveChatHours()) {
-            //     router.push({ pathname: "/live-chat" });
-            //   } else {
-            //     router.push({ pathname: "/escalate", params: { year: year ? String(year) : "" } });
-            //   }
-            // }}
             onPress={() => {
-  router.push({ pathname: "/live-chat" });
-}}
+              router.push({ pathname: "/live-chat" });
+            }}
           >
             <Text style={styles.escalateText}>Chat with Vinnies now</Text>
-<Text style={styles.escalateSub}>You’re chatting directly with the owner.</Text>
-
+            <Text style={styles.escalateSub}>You’re chatting directly with the owner.</Text>
           </Pressable>
         )}
 
-        <View style={styles.inputWrap}>
+        <View
+          style={[
+            styles.inputWrap,
+            keyboardOpen && Platform.OS === "ios" ? { paddingBottom: 28 } : null,
+          ]}
+        >
           <View style={styles.inputCard}>
             <TextInput
               ref={inputRef}
@@ -363,7 +395,24 @@ const styles = StyleSheet.create({
   aiBubble: { backgroundColor: "#111827", borderColor: "rgba(255,255,255,0.10)" },
   userBubble: { backgroundColor: "#2563EB", borderColor: "rgba(255,255,255,0.10)" },
 
-  // NEW style for bold question at top
+  // Banner (not from Vinnies DB)
+  notFromVinniesBanner: {
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    marginBottom: 10,
+    backgroundColor: "rgba(245,158,11,0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(245,158,11,0.25)",
+  },
+  notFromVinniesText: {
+    color: "rgba(255,255,255,0.92)",
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "900",
+  },
+
+  // Bold clarifying question at top
   clarifyingQuestion: {
     fontSize: 15,
     lineHeight: 20,

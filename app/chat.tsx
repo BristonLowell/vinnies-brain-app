@@ -202,9 +202,6 @@ export default function Chat() {
     } finally {
       setSending(false);
       scrollToBottom(true);
-      requestAnimationFrame(() => {
-        inputRef.current?.focus();
-      });
     }
   }
 

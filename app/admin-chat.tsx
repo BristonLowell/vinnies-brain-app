@@ -20,7 +20,7 @@ import {
   getSavedAdminKey,
   type LiveChatHistoryResponse,
 } from "../src/api";
-import { API_BASE_URL } from "../src/config"; // ✅ assumes you already have this like other screens do
+import { API_BASE_URL } from "../src/config";
 
 type Msg = LiveChatHistoryResponse["messages"][number];
 
@@ -30,14 +30,31 @@ type AiMsg = {
   created_at?: string;
 };
 
+type AiMeta = {
+  active_article_id?: string | null;
+  active_node_id?: string | null;
+  active_node_text?: string | null;
+  active_tree_present?: boolean;
+};
+
+type AiHistoryResponse = {
+  session_id?: string;
+  messages?: AiMsg[];
+} & AiMeta;
+
 const INPUT_BAR_EST_HEIGHT = 76;
-const IOS_KEYBOARD_OFFSET = 120; // ⬅️ raised so input sits higher on iOS
+const IOS_KEYBOARD_OFFSET = 120;
 
 function fmt(ts?: string) {
   if (!ts) return "";
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return ts;
   return d.toLocaleString();
+}
+
+function shortId(id?: string | null, n = 8) {
+  if (!id) return "";
+  return id.length <= n ? id : `${id.slice(0, n)}…`;
 }
 
 export default function AdminChat() {
@@ -59,7 +76,9 @@ export default function AdminChat() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
   const [aiMessages, setAiMessages] = useState<AiMsg[]>([]);
+  const [aiMeta, setAiMeta] = useState<AiMeta>({});
   const [showAi, setShowAi] = useState(true);
+  const [aiExpanded, setAiExpanded] = useState(false);
 
   const listRef = useRef<FlatList<Msg>>(null);
   const pollRef = useRef<any>(null);
@@ -97,11 +116,20 @@ export default function AdminChat() {
         });
         if (!r.ok) throw new Error(await r.text());
 
-        const data = await r.json();
+        const data = (await r.json()) as AiHistoryResponse;
+
         const msgs = Array.isArray(data?.messages) ? (data.messages as AiMsg[]) : [];
         setAiMessages(msgs);
+
+        setAiMeta({
+          active_article_id: data?.active_article_id ?? null,
+          active_node_id: data?.active_node_id ?? null,
+          active_node_text: data?.active_node_text ?? null,
+          active_tree_present: typeof data?.active_tree_present === "boolean" ? data.active_tree_present : undefined,
+        });
       } catch (e: any) {
         setAiError(String(e?.message ?? "Failed to load AI history."));
+        setAiMeta({});
       } finally {
         setAiLoading(false);
       }
@@ -202,14 +230,57 @@ export default function AdminChat() {
     );
   }
 
+  const aiCountToShow = aiExpanded ? 60 : 12;
+  const aiSlice = aiMessages.length > aiCountToShow ? aiMessages.slice(-aiCountToShow) : aiMessages;
+
+  const isPinned =
+    !!aiMeta?.active_tree_present &&
+    !!aiMeta?.active_article_id &&
+    !!aiMeta?.active_node_id;
+
   const AiHeader = (
     <View style={styles.aiWrap}>
       <View style={styles.aiTopRow}>
         <Text style={styles.aiTitle}>AI troubleshooting so far</Text>
-        <Pressable onPress={() => setShowAi((v) => !v)} style={styles.aiToggleBtn}>
-          <Text style={styles.aiToggleText}>{showAi ? "Hide" : "Show"}</Text>
-        </Pressable>
+
+        <View style={styles.aiTopBtns}>
+          {aiMessages.length > 12 && (
+            <Pressable onPress={() => setAiExpanded((v) => !v)} style={styles.aiToggleBtn}>
+              <Text style={styles.aiToggleText}>{aiExpanded ? "Show less" : "Show more"}</Text>
+            </Pressable>
+          )}
+
+          <Pressable onPress={() => setShowAi((v) => !v)} style={styles.aiToggleBtn}>
+            <Text style={styles.aiToggleText}>{showAi ? "Hide" : "Show"}</Text>
+          </Pressable>
+        </View>
       </View>
+
+      {/* Pinned flow status */}
+      <View style={styles.aiMetaRow}>
+        <View style={[styles.pill, isPinned ? styles.pillGreen : styles.pillGray]}>
+          <Text style={styles.pillText}>{isPinned ? "Pinned flow: ON" : "Pinned flow: OFF"}</Text>
+        </View>
+
+        {!!aiMeta?.active_article_id && (
+          <View style={styles.pill}>
+            <Text style={styles.pillText}>Article: {shortId(aiMeta.active_article_id)}</Text>
+          </View>
+        )}
+
+        {!!aiMeta?.active_node_id && (
+          <View style={styles.pill}>
+            <Text style={styles.pillText}>Node: {shortId(aiMeta.active_node_id)}</Text>
+          </View>
+        )}
+      </View>
+
+      {!!aiMeta?.active_node_text && (
+        <View style={styles.aiNodeBox}>
+          <Text style={styles.aiNodeLabel}>Current question</Text>
+          <Text style={styles.aiNodeText}>{aiMeta.active_node_text}</Text>
+        </View>
+      )}
 
       {aiLoading ? (
         <Text style={styles.aiSub}>Loading…</Text>
@@ -219,9 +290,12 @@ export default function AdminChat() {
         <Text style={styles.aiSub}>No AI chat history yet.</Text>
       ) : (
         <View style={styles.aiMsgs}>
-          {aiMessages.slice(-10).map((m, idx) => (
-            <View key={idx} style={styles.aiMsgRow}>
-              <Text style={styles.aiRole}>{m.role === "assistant" ? "AI" : "User"}</Text>
+          {aiSlice.map((m, idx) => (
+            <View key={`${idx}-${m.created_at ?? ""}`} style={styles.aiMsgRow}>
+              <View style={styles.aiMsgHeader}>
+                <Text style={styles.aiRole}>{m.role === "assistant" ? "AI" : "User"}</Text>
+                {!!m.created_at && <Text style={styles.aiTime}>{fmt(m.created_at)}</Text>}
+              </View>
               <Text style={styles.aiText}>{m.text}</Text>
             </View>
           ))}
@@ -374,8 +448,10 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.05)",
     marginBottom: 10,
   },
-  aiTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  aiTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   aiTitle: { color: "white", fontWeight: "900" },
+  aiTopBtns: { flexDirection: "row", gap: 8 },
+
   aiToggleBtn: {
     height: 30,
     paddingHorizontal: 10,
@@ -387,11 +463,48 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   aiToggleText: { color: "white", fontWeight: "900", fontSize: 12 },
+
+  aiMetaRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
+
+  pill: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
+  pillGreen: {
+    backgroundColor: "rgba(34,197,94,0.15)",
+    borderColor: "rgba(34,197,94,0.25)",
+  },
+  pillGray: {
+    backgroundColor: "rgba(148,163,184,0.10)",
+    borderColor: "rgba(148,163,184,0.18)",
+  },
+  pillText: { color: "rgba(255,255,255,0.92)", fontWeight: "900", fontSize: 12 },
+
+  aiNodeBox: {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    backgroundColor: "rgba(255,255,255,0.06)",
+  },
+  aiNodeLabel: { color: "rgba(255,255,255,0.70)", fontWeight: "900", fontSize: 12, marginBottom: 6 },
+  aiNodeText: { color: "white", fontSize: 14, lineHeight: 19, fontWeight: "700" },
+
   aiSub: { color: "rgba(255,255,255,0.65)", marginTop: 8, fontWeight: "700" },
   aiErr: { color: "rgba(239,68,68,0.95)", marginTop: 8, fontWeight: "900" },
+
   aiMsgs: { marginTop: 10, gap: 10 },
-  aiMsgRow: { gap: 4 },
+  aiMsgRow: { gap: 6 },
+
+  aiMsgHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   aiRole: { color: "rgba(255,255,255,0.75)", fontWeight: "900", fontSize: 12 },
+  aiTime: { color: "rgba(255,255,255,0.45)", fontWeight: "800", fontSize: 11 },
+
   aiText: { color: "white", fontSize: 14, lineHeight: 19 },
 
   inputWrap: {

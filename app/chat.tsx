@@ -9,12 +9,12 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
-  AppState,
   ActivityIndicator,
   Keyboard,
   StatusBar,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getOrCreateSession, sendChat } from "../src/api";
 
 type ChatItem = {
@@ -32,27 +32,6 @@ const INITIAL_ASSISTANT: ChatItem = {
   text: "What’s going on with your Airstream?",
 };
 
-function initials(label: string) {
-  const s = (label || "").trim();
-  if (!s) return "?";
-  const parts = s.split(/\s+/).slice(0, 2);
-  return parts.map((p) => p[0]?.toUpperCase()).join("");
-}
-
-/**
- * Live chat availability: Mon–Fri, 8:00am–5:00pm Pacific
- * (5pm treated as closed: hour < 17)
- */
-function isLiveChatHours(): boolean {
-  const now = new Date();
-  const ptNow = new Date(now.toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
-  const hour = ptNow.getHours(); // 0–23
-  const day = ptNow.getDay(); // 0=Sun ... 6=Sat
-  const isWeekday = day >= 1 && day <= 5;
-  const isBusinessHours = hour >= 8 && hour < 17;
-  return isWeekday && isBusinessHours;
-}
-
 // Banner text your backend prepends when no KB article is found
 const NOT_FROM_VINNIES_PREFIX = "⚠️ This information is NOT from Vinnies";
 
@@ -64,12 +43,17 @@ function parseNonVinniesBanner(text: string): { hasBanner: boolean; body: string
 
   // Remove the first line (banner) and any following blank line
   const lines = raw.split("\n");
-  // Drop first line
-  lines.shift();
-  // Drop a leading blank line if present
-  while (lines.length > 0 && lines[0].trim() === "") lines.shift();
+  lines.shift(); // drop first line
+  while (lines.length > 0 && lines[0].trim() === "") lines.shift(); // drop leading blank(s)
 
   return { hasBanner: true, body: lines.join("\n") };
+}
+
+function initials(label: string) {
+  const s = (label || "").trim();
+  if (!s) return "?";
+  const parts = s.split(/\s+/).slice(0, 2);
+  return parts.map((p) => p[0]?.toUpperCase()).join("");
 }
 
 export default function Chat() {
@@ -84,13 +68,19 @@ export default function Chat() {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [showEscalate, setShowEscalate] = useState(false);
-  const [expectsYesNo, setExpectsYesNo] = useState(false);
 
   const listRef = useRef<FlatList<ChatItem>>(null);
   const inputRef = useRef<TextInput>(null);
 
-  const lastResetAt = useRef(0);
-  const didIgnoreFirstActive = useRef(false);
+  // Storage keys (scoped by year so different year selections don't overwrite each other)
+  const storageKeySuffix = useMemo(() => {
+    const y = year ? String(year) : "any";
+    // If you want category-scoped persistence too, add it here (params.category).
+    return `y:${y}`;
+  }, [year]);
+
+  const CHAT_ITEMS_KEY = useMemo(() => `vinniesbrain_chat_items_${storageKeySuffix}`, [storageKeySuffix]);
+  const CHAT_SESSION_KEY = useMemo(() => `vinniesbrain_chat_session_${storageKeySuffix}`, [storageKeySuffix]);
 
   useEffect(() => {
     const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardOpen(true));
@@ -100,38 +90,6 @@ export default function Chat() {
       hide.remove();
     };
   }, []);
-
-  const resetConversation = useCallback(async () => {
-    const now = Date.now();
-    if (now - lastResetAt.current < 800) return;
-    lastResetAt.current = now;
-
-    setItems([INITIAL_ASSISTANT]);
-    setText("");
-    setShowEscalate(false);
-    setSending(false);
-    setExpectsYesNo(false);
-
-    const sid = await getOrCreateSession({ forceNew: true });
-    setSessionId(sid);
-  }, []);
-
-  useEffect(() => {
-    resetConversation();
-  }, [resetConversation]);
-
-  useEffect(() => {
-    const sub = AppState.addEventListener("change", (state) => {
-      if (state === "active") {
-        if (!didIgnoreFirstActive.current) {
-          didIgnoreFirstActive.current = true;
-          return;
-        }
-        resetConversation();
-      }
-    });
-    return () => sub.remove();
-  }, [resetConversation]);
 
   const scrollToBottom = useCallback((animated = true) => {
     requestAnimationFrame(() => {
@@ -143,10 +101,112 @@ export default function Chat() {
     scrollToBottom(true);
   }, [items.length, scrollToBottom]);
 
-  const showBinaryControls = useMemo(() => {
-    if (sending) return false;
-    return expectsYesNo;
-  }, [expectsYesNo, sending]);
+  /**
+   * Restore conversation/session from storage on mount (and when year changes),
+   * otherwise start a fresh session + initial assistant prompt.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const [storedItemsRaw, storedSid] = await Promise.all([
+          AsyncStorage.getItem(CHAT_ITEMS_KEY),
+          AsyncStorage.getItem(CHAT_SESSION_KEY),
+        ]);
+
+        if (cancelled) return;
+
+        // Restore items
+        if (storedItemsRaw) {
+          try {
+            const parsed = JSON.parse(storedItemsRaw) as ChatItem[];
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setItems(parsed);
+            } else {
+              setItems([INITIAL_ASSISTANT]);
+            }
+          } catch {
+            setItems([INITIAL_ASSISTANT]);
+          }
+        } else {
+          setItems([INITIAL_ASSISTANT]);
+        }
+
+        // Restore sessionId (or create one if missing)
+        if (storedSid) {
+          setSessionId(storedSid);
+        } else {
+          const sid = await getOrCreateSession({ forceNew: true });
+          if (cancelled) return;
+          setSessionId(sid);
+          await AsyncStorage.setItem(CHAT_SESSION_KEY, sid);
+        }
+      } catch {
+        // Safe fallback
+        setItems([INITIAL_ASSISTANT]);
+        try {
+          const sid = await getOrCreateSession({ forceNew: true });
+          if (!cancelled) setSessionId(sid);
+        } catch {
+          // ignore
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [CHAT_ITEMS_KEY, CHAT_SESSION_KEY]);
+
+  /**
+   * Persist items + sessionId whenever they change
+   */
+  useEffect(() => {
+    (async () => {
+      try {
+        await AsyncStorage.setItem(CHAT_ITEMS_KEY, JSON.stringify(items));
+      } catch {
+        // ignore
+      }
+    })();
+  }, [CHAT_ITEMS_KEY, items]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    (async () => {
+      try {
+        await AsyncStorage.setItem(CHAT_SESSION_KEY, sessionId);
+      } catch {
+        // ignore
+      }
+    })();
+  }, [CHAT_SESSION_KEY, sessionId]);
+
+  /**
+   * Manual reset helper (not called automatically).
+   * You can wire this to a "New Chat" button later if you want.
+   */
+  const resetConversation = useCallback(async () => {
+    setItems([INITIAL_ASSISTANT]);
+    setText("");
+    setShowEscalate(false);
+    setSending(false);
+
+    try {
+      await AsyncStorage.multiRemove([CHAT_ITEMS_KEY, CHAT_SESSION_KEY]);
+    } catch {
+      // ignore
+    }
+
+    const sid = await getOrCreateSession({ forceNew: true });
+    setSessionId(sid);
+    try {
+      await AsyncStorage.setItem(CHAT_SESSION_KEY, sid);
+    } catch {
+      // ignore
+    }
+  }, [CHAT_ITEMS_KEY, CHAT_SESSION_KEY]);
 
   async function onSend(msg?: string) {
     if (sending) return;
@@ -162,6 +222,7 @@ export default function Chat() {
     scrollToBottom(true);
 
     try {
+      // Ensure sessionId exists
       const sid = sessionId || (await getOrCreateSession({ forceNew: true }));
       if (!sessionId) setSessionId(sid);
 
@@ -173,8 +234,6 @@ export default function Chat() {
 
       const cq = Array.isArray(res.clarifying_questions) ? res.clarifying_questions : [];
       const clarifyingQuestion = cq?.[0] ? String(cq[0]) : "";
-
-      setExpectsYesNo(cq.length > 0);
 
       setItems((prev) => [
         ...prev,
@@ -191,7 +250,6 @@ export default function Chat() {
 
       setShowEscalate(!!res.show_escalation);
     } catch (e: any) {
-      setExpectsYesNo(false);
       setItems((prev) => [
         ...prev,
         {
@@ -206,10 +264,6 @@ export default function Chat() {
   }
 
   const canSend = text.trim().length > 0 && !sending;
-
-  // Used for label/subtext (re-check also happens on press)
-  const liveChatAvailable = true;
-  // const liveChatAvailable = isLiveChatHours();
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
@@ -280,26 +334,6 @@ export default function Chat() {
           }
         />
 
-        {showBinaryControls && (
-          <View style={styles.binaryRow}>
-            <Pressable
-              style={({ pressed }) => [styles.binaryBtn, styles.yesBtn, pressed && { opacity: 0.9 }]}
-              disabled={sending}
-              onPress={() => onSend("yes")}
-            >
-              <Text style={styles.binaryText}>Yes</Text>
-            </Pressable>
-
-            <Pressable
-              style={({ pressed }) => [styles.binaryBtn, styles.noBtn, pressed && { opacity: 0.9 }]}
-              disabled={sending}
-              onPress={() => onSend("no")}
-            >
-              <Text style={styles.binaryText}>No</Text>
-            </Pressable>
-          </View>
-        )}
-
         {showEscalate && (
           <Pressable
             style={({ pressed }) => [styles.escalate, pressed && { opacity: 0.9, transform: [{ scale: 0.99 }] }]}
@@ -312,12 +346,7 @@ export default function Chat() {
           </Pressable>
         )}
 
-        <View
-          style={[
-            styles.inputWrap,
-            keyboardOpen && Platform.OS === "ios" ? { paddingBottom: 28 } : null,
-          ]}
-        >
+        <View style={[styles.inputWrap, keyboardOpen && Platform.OS === "ios" ? { paddingBottom: 28 } : null]}>
           <View style={styles.inputCard}>
             <TextInput
               ref={inputRef}
@@ -424,18 +453,6 @@ const styles = StyleSheet.create({
 
   typingBubble: { flexDirection: "row", alignItems: "center", gap: 8 },
   typingText: { color: "rgba(255,255,255,0.75)", fontWeight: "700" },
-
-  binaryRow: {
-    flexDirection: "row",
-    gap: 10,
-    paddingHorizontal: 14,
-    paddingTop: 8,
-    paddingBottom: 8,
-  },
-  binaryBtn: { flex: 1, paddingVertical: 12, borderRadius: 14, alignItems: "center" },
-  yesBtn: { backgroundColor: "#16A34A" },
-  noBtn: { backgroundColor: "#EF4444" },
-  binaryText: { color: "white", fontSize: 15, fontWeight: "900" },
 
   escalate: {
     marginHorizontal: 14,

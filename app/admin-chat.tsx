@@ -233,10 +233,7 @@ export default function AdminChat() {
   const aiCountToShow = aiExpanded ? 60 : 12;
   const aiSlice = aiMessages.length > aiCountToShow ? aiMessages.slice(-aiCountToShow) : aiMessages;
 
-  const isPinned =
-    !!aiMeta?.active_tree_present &&
-    !!aiMeta?.active_article_id &&
-    !!aiMeta?.active_node_id;
+  const isPinned = !!aiMeta?.active_tree_present && !!aiMeta?.active_article_id && !!aiMeta?.active_node_id;
 
   const AiHeader = (
     <View style={styles.aiWrap}>
@@ -308,7 +305,7 @@ export default function AdminChat() {
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <KeyboardAvoidingView
         style={styles.safe}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? IOS_KEYBOARD_OFFSET : 0}
       >
         <View style={styles.header}>
@@ -359,7 +356,7 @@ export default function AdminChat() {
           />
         )}
 
-        <View style={[styles.inputWrap, keyboardOpen && Platform.OS === "ios" ? { paddingBottom: 28 } : null]}>
+        <View style={[styles.inputWrap, keyboardOpen ? { paddingBottom: 28 } : null]}>
           <TextInput
             value={text}
             onChangeText={setText}

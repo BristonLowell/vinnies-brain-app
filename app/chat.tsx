@@ -271,7 +271,7 @@ export default function Chat() {
 
       <KeyboardAvoidingView
         style={styles.safe}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? 120 : 0}
       >
         <Pressable onPress={Keyboard.dismiss} style={StyleSheet.absoluteFill} pointerEvents="box-none">
@@ -346,7 +346,8 @@ export default function Chat() {
           </Pressable>
         )}
 
-        <View style={[styles.inputWrap, keyboardOpen && Platform.OS === "ios" ? { paddingBottom: 28 } : null]}>
+        {/* ✅ was iOS-only; now applies on Android too */}
+        <View style={[styles.inputWrap, keyboardOpen ? { paddingBottom: 28 } : null]}>
           <View style={styles.inputCard}>
             <TextInput
               ref={inputRef}

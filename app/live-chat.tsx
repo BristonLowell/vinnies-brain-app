@@ -23,8 +23,8 @@ type Msg = {
   conversation_id?: string;
 };
 
-const INPUT_BAR_EST_HEIGHT = 76; // gives the list breathing room above the input
-const IOS_KEYBOARD_OFFSET = 120; // ⬅️ raised so input sits higher on iOS
+const INPUT_BAR_EST_HEIGHT = 76;
+const IOS_KEYBOARD_OFFSET = 120;
 
 export default function LiveChat() {
   const [keyboardOpen, setKeyboardOpen] = useState(false);
@@ -152,7 +152,7 @@ export default function LiveChat() {
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <KeyboardAvoidingView
         style={styles.safe}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? IOS_KEYBOARD_OFFSET : 0}
       >
         <View style={styles.header}>
@@ -191,7 +191,8 @@ export default function LiveChat() {
           />
         )}
 
-        <View style={[styles.inputWrap, keyboardOpen && Platform.OS === "ios" ? { paddingBottom: 28 } : null]}>
+        {/* ✅ was iOS-only; now applies on Android too */}
+        <View style={[styles.inputWrap, keyboardOpen ? { paddingBottom: 28 } : null]}>
           <TextInput
             value={text}
             onChangeText={setText}

@@ -13,9 +13,19 @@ import {
   Keyboard,
   StatusBar,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getOrCreateSession, sendChat } from "../src/api";
+
+const BRAND = {
+  bg: "#071018",
+  surface: "rgba(255,255,255,0.06)",
+  border: "rgba(255,255,255,0.10)",
+  navy: "#043553",
+  cream: "#F1EEDB",
+  text: "rgba(255,255,255,0.92)",
+  muted: "rgba(255,255,255,0.70)",
+};
 
 type ChatItem = {
   role: "user" | "assistant";
@@ -23,7 +33,7 @@ type ChatItem = {
   meta?: {
     usedArticles?: { id: string; title: string }[];
     showEscalation?: boolean;
-    clarifyingQuestion?: string; // show this bold at top of AI response
+    clarifyingQuestion?: string;
   };
 };
 
@@ -32,20 +42,16 @@ const INITIAL_ASSISTANT: ChatItem = {
   text: "What’s going on with your Airstream?",
 };
 
-// Banner text your backend prepends when no KB article is found
+const INPUT_BAR_EST_HEIGHT = 76;
 const NOT_FROM_VINNIES_PREFIX = "⚠️ This information is NOT from Vinnies";
 
 function parseNonVinniesBanner(text: string): { hasBanner: boolean; body: string } {
   const raw = (text ?? "").trimStart();
-  if (!raw.startsWith(NOT_FROM_VINNIES_PREFIX)) {
-    return { hasBanner: false, body: text };
-  }
+  if (!raw.startsWith(NOT_FROM_VINNIES_PREFIX)) return { hasBanner: false, body: text };
 
-  // Remove the first line (banner) and any following blank line
   const lines = raw.split("\n");
-  lines.shift(); // drop first line
-  while (lines.length > 0 && lines[0].trim() === "") lines.shift(); // drop leading blank(s)
-
+  lines.shift();
+  while (lines.length > 0 && lines[0].trim() === "") lines.shift();
   return { hasBanner: true, body: lines.join("\n") };
 }
 
@@ -58,6 +64,9 @@ function initials(label: string) {
 
 export default function Chat() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const safeBottom = Math.max(insets.bottom, 12);
+
   const params = useLocalSearchParams<{ year?: string; category?: string }>();
   const year = params.year ? Number(params.year) : undefined;
 
@@ -72,10 +81,8 @@ export default function Chat() {
   const listRef = useRef<FlatList<ChatItem>>(null);
   const inputRef = useRef<TextInput>(null);
 
-  // Storage keys (scoped by year so different year selections don't overwrite each other)
   const storageKeySuffix = useMemo(() => {
     const y = year ? String(year) : "any";
-    // If you want category-scoped persistence too, add it here (params.category).
     return `y:${y}`;
   }, [year]);
 
@@ -92,19 +99,13 @@ export default function Chat() {
   }, []);
 
   const scrollToBottom = useCallback((animated = true) => {
-    requestAnimationFrame(() => {
-      listRef.current?.scrollToEnd({ animated });
-    });
+    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated }));
   }, []);
 
   useEffect(() => {
     scrollToBottom(true);
   }, [items.length, scrollToBottom]);
 
-  /**
-   * Restore conversation/session from storage on mount (and when year changes),
-   * otherwise start a fresh session + initial assistant prompt.
-   */
   useEffect(() => {
     let cancelled = false;
 
@@ -117,15 +118,10 @@ export default function Chat() {
 
         if (cancelled) return;
 
-        // Restore items
         if (storedItemsRaw) {
           try {
             const parsed = JSON.parse(storedItemsRaw) as ChatItem[];
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              setItems(parsed);
-            } else {
-              setItems([INITIAL_ASSISTANT]);
-            }
+            setItems(Array.isArray(parsed) && parsed.length > 0 ? parsed : [INITIAL_ASSISTANT]);
           } catch {
             setItems([INITIAL_ASSISTANT]);
           }
@@ -133,7 +129,6 @@ export default function Chat() {
           setItems([INITIAL_ASSISTANT]);
         }
 
-        // Restore sessionId (or create one if missing)
         if (storedSid) {
           setSessionId(storedSid);
         } else {
@@ -143,14 +138,11 @@ export default function Chat() {
           await AsyncStorage.setItem(CHAT_SESSION_KEY, sid);
         }
       } catch {
-        // Safe fallback
         setItems([INITIAL_ASSISTANT]);
         try {
           const sid = await getOrCreateSession({ forceNew: true });
           if (!cancelled) setSessionId(sid);
-        } catch {
-          // ignore
-        }
+        } catch {}
       }
     })();
 
@@ -159,16 +151,11 @@ export default function Chat() {
     };
   }, [CHAT_ITEMS_KEY, CHAT_SESSION_KEY]);
 
-  /**
-   * Persist items + sessionId whenever they change
-   */
   useEffect(() => {
     (async () => {
       try {
         await AsyncStorage.setItem(CHAT_ITEMS_KEY, JSON.stringify(items));
-      } catch {
-        // ignore
-      }
+      } catch {}
     })();
   }, [CHAT_ITEMS_KEY, items]);
 
@@ -177,36 +164,9 @@ export default function Chat() {
     (async () => {
       try {
         await AsyncStorage.setItem(CHAT_SESSION_KEY, sessionId);
-      } catch {
-        // ignore
-      }
+      } catch {}
     })();
   }, [CHAT_SESSION_KEY, sessionId]);
-
-  /**
-   * Manual reset helper (not called automatically).
-   * You can wire this to a "New Chat" button later if you want.
-   */
-  const resetConversation = useCallback(async () => {
-    setItems([INITIAL_ASSISTANT]);
-    setText("");
-    setShowEscalate(false);
-    setSending(false);
-
-    try {
-      await AsyncStorage.multiRemove([CHAT_ITEMS_KEY, CHAT_SESSION_KEY]);
-    } catch {
-      // ignore
-    }
-
-    const sid = await getOrCreateSession({ forceNew: true });
-    setSessionId(sid);
-    try {
-      await AsyncStorage.setItem(CHAT_SESSION_KEY, sid);
-    } catch {
-      // ignore
-    }
-  }, [CHAT_ITEMS_KEY, CHAT_SESSION_KEY]);
 
   async function onSend(msg?: string) {
     if (sending) return;
@@ -222,7 +182,6 @@ export default function Chat() {
     scrollToBottom(true);
 
     try {
-      // Ensure sessionId exists
       const sid = sessionId || (await getOrCreateSession({ forceNew: true }));
       if (!sessionId) setSessionId(sid);
 
@@ -240,23 +199,13 @@ export default function Chat() {
         {
           role: "assistant",
           text: res.answer,
-          meta: {
-            usedArticles,
-            showEscalation: !!res.show_escalation,
-            clarifyingQuestion,
-          },
+          meta: { usedArticles, showEscalation: !!res.show_escalation, clarifyingQuestion },
         },
       ]);
 
       setShowEscalate(!!res.show_escalation);
-    } catch (e: any) {
-      setItems((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          text: "Sorry — I couldn’t reach the server. Please try again.",
-        },
-      ]);
+    } catch {
+      setItems((prev) => [...prev, { role: "assistant", text: "Sorry — I couldn’t reach the server. Please try again." }]);
     } finally {
       setSending(false);
       scrollToBottom(true);
@@ -282,7 +231,10 @@ export default function Chat() {
           ref={listRef}
           data={items}
           keyExtractor={(_, i) => String(i)}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[
+            styles.listContent,
+            { paddingBottom: styles.listContent.paddingBottom + INPUT_BAR_EST_HEIGHT + 16 + safeBottom },
+          ]}
           keyboardShouldPersistTaps="always"
           keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
           onScrollBeginDrag={Keyboard.dismiss}
@@ -290,7 +242,6 @@ export default function Chat() {
           renderItem={({ item }) => {
             const isUser = item.role === "user";
             const cq = item.meta?.clarifyingQuestion?.trim();
-
             const parsed = !isUser ? parseNonVinniesBanner(item.text) : { hasBanner: false, body: item.text };
 
             return (
@@ -302,16 +253,12 @@ export default function Chat() {
                 )}
 
                 <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
-                  {/* Banner if not from KB */}
                   {!isUser && parsed.hasBanner && (
                     <View style={styles.notFromVinniesBanner}>
-                      <Text style={styles.notFromVinniesText}>
-                        ⚠️ This information is NOT from Vinnies Brain’s database.
-                      </Text>
+                      <Text style={styles.notFromVinniesText}>⚠️ This information is NOT from Vinnies Brain’s database.</Text>
                     </View>
                   )}
 
-                  {/* Bold clarifying question at top of AI response */}
                   {!isUser && !!cq && <Text style={styles.clarifyingQuestion}>{cq}</Text>}
 
                   <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>{parsed.body}</Text>
@@ -336,18 +283,21 @@ export default function Chat() {
 
         {showEscalate && (
           <Pressable
-            style={({ pressed }) => [styles.escalate, pressed && { opacity: 0.9, transform: [{ scale: 0.99 }] }]}
-            onPress={() => {
-              router.push({ pathname: "/live-chat" });
-            }}
+            style={({ pressed }) => [styles.escalate, pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] }]}
+            onPress={() => router.push({ pathname: "/live-chat" })}
           >
             <Text style={styles.escalateText}>Chat with Vinnies now</Text>
             <Text style={styles.escalateSub}>You’re chatting directly with the owner.</Text>
           </Pressable>
         )}
 
-        {/* ✅ was iOS-only; now applies on Android too */}
-        <View style={[styles.inputWrap, keyboardOpen ? { paddingBottom: 28 } : null]}>
+        <View
+          style={[
+            styles.inputWrap,
+            { paddingBottom: 10 + safeBottom },
+            keyboardOpen ? { paddingBottom: 28 + safeBottom } : null,
+          ]}
+        >
           <View style={styles.inputCard}>
             <TextInput
               ref={inputRef}
@@ -369,7 +319,7 @@ export default function Chat() {
               style={({ pressed }) => [
                 styles.sendBtn,
                 !canSend && styles.sendBtnDisabled,
-                pressed && canSend && { opacity: 0.9, transform: [{ scale: 0.99 }] },
+                pressed && canSend && { opacity: 0.92, transform: [{ scale: 0.99 }] },
               ]}
             >
               <Text style={styles.sendText}>Send</Text>
@@ -382,21 +332,11 @@ export default function Chat() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#0B0F14" },
+  safe: { flex: 1, backgroundColor: BRAND.bg },
 
-  listContent: {
-    paddingHorizontal: 14,
-    paddingTop: 14,
-    paddingBottom: 10,
-    gap: 10,
-    flexGrow: 1,
-  },
+  listContent: { paddingHorizontal: 14, paddingTop: 14, paddingBottom: 10, gap: 10, flexGrow: 1 },
 
-  row: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    gap: 10,
-  },
+  row: { flexDirection: "row", alignItems: "flex-end", gap: 10 },
   rowLeft: { justifyContent: "flex-start" },
   rowRight: { justifyContent: "flex-end" },
 
@@ -404,56 +344,37 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.10)",
+    backgroundColor: "rgba(241,238,219,0.10)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    borderColor: "rgba(241,238,219,0.20)",
     alignItems: "center",
     justifyContent: "center",
   },
-  avatarText: { color: "rgba(255,255,255,0.85)", fontSize: 11, fontWeight: "900" },
+  avatarText: { color: BRAND.cream, fontSize: 11, fontWeight: "900" },
 
-  bubble: {
-    maxWidth: "82%",
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 18,
-    borderWidth: 1,
-  },
-  aiBubble: { backgroundColor: "#111827", borderColor: "rgba(255,255,255,0.10)" },
-  userBubble: { backgroundColor: "#2563EB", borderColor: "rgba(255,255,255,0.10)" },
+  bubble: { maxWidth: "82%", paddingVertical: 10, paddingHorizontal: 12, borderRadius: 18, borderWidth: 1 },
+  aiBubble: { backgroundColor: "rgba(255,255,255,0.05)", borderColor: BRAND.border },
+  userBubble: { backgroundColor: BRAND.navy, borderColor: "rgba(241,238,219,0.18)" },
 
-  // Banner (not from Vinnies DB)
   notFromVinniesBanner: {
     paddingVertical: 8,
     paddingHorizontal: 10,
     borderRadius: 12,
     marginBottom: 10,
-    backgroundColor: "rgba(245,158,11,0.15)",
+    backgroundColor: "rgba(241,238,219,0.10)",
     borderWidth: 1,
-    borderColor: "rgba(245,158,11,0.25)",
+    borderColor: "rgba(241,238,219,0.18)",
   },
-  notFromVinniesText: {
-    color: "rgba(255,255,255,0.92)",
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: "900",
-  },
+  notFromVinniesText: { color: BRAND.cream, fontSize: 12, lineHeight: 16, fontWeight: "900" },
 
-  // Bold clarifying question at top
-  clarifyingQuestion: {
-    fontSize: 15,
-    lineHeight: 20,
-    fontWeight: "900",
-    color: "rgba(255,255,255,0.95)",
-    marginBottom: 8,
-  },
+  clarifyingQuestion: { fontSize: 15, lineHeight: 20, fontWeight: "900", color: BRAND.cream, marginBottom: 8 },
 
   bubbleText: { fontSize: 15, lineHeight: 20 },
-  aiText: { color: "rgba(255,255,255,0.92)" },
-  userText: { color: "white", fontWeight: "600" },
+  aiText: { color: BRAND.text },
+  userText: { color: BRAND.cream, fontWeight: "700" },
 
   typingBubble: { flexDirection: "row", alignItems: "center", gap: 8 },
-  typingText: { color: "rgba(255,255,255,0.75)", fontWeight: "700" },
+  typingText: { color: BRAND.muted, fontWeight: "800" },
 
   escalate: {
     marginHorizontal: 14,
@@ -461,30 +382,30 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     padding: 14,
     borderRadius: 16,
-    backgroundColor: "rgba(239,68,68,0.15)",
+    backgroundColor: "rgba(4,53,83,0.22)",
     borderWidth: 1,
-    borderColor: "rgba(239,68,68,0.25)",
+    borderColor: "rgba(241,238,219,0.18)",
     alignItems: "flex-start",
   },
-  escalateText: { color: "white", fontWeight: "900", fontSize: 15 },
-  escalateSub: { marginTop: 4, color: "rgba(255,255,255,0.7)", fontSize: 12 },
+  escalateText: { color: BRAND.cream, fontWeight: "900", fontSize: 15 },
+  escalateSub: { marginTop: 4, color: BRAND.muted, fontSize: 12 },
 
   inputWrap: {
     paddingHorizontal: 14,
     paddingTop: 10,
     paddingBottom: 10,
     borderTopWidth: 1,
-    borderTopColor: "rgba(255,255,255,0.08)",
-    backgroundColor: "#0B0F14",
+    borderTopColor: BRAND.border,
+    backgroundColor: BRAND.bg,
   },
   inputCard: {
     flexDirection: "row",
     gap: 10,
     padding: 10,
     borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: BRAND.surface,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
+    borderColor: BRAND.border,
     alignItems: "flex-end",
   },
   input: {
@@ -503,8 +424,8 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "white",
+    backgroundColor: BRAND.cream,
   },
-  sendBtnDisabled: { backgroundColor: "rgba(255,255,255,0.35)" },
-  sendText: { color: "#0B0F14", fontWeight: "900" },
+  sendBtnDisabled: { backgroundColor: "rgba(241,238,219,0.35)" },
+  sendText: { color: BRAND.navy, fontWeight: "900" },
 });

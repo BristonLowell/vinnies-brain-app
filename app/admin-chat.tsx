@@ -12,7 +12,7 @@ import {
   InteractionManager,
   Keyboard,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import {
   adminLiveChatHistory,
@@ -58,6 +58,9 @@ function shortId(id?: string | null, n = 8) {
 }
 
 export default function AdminChat() {
+  const insets = useSafeAreaInsets();
+  const safeBottom = Math.max(insets.bottom, 12);
+
   const router = useRouter();
   const params = useLocalSearchParams<{ conversation_id?: string; customer_id?: string }>();
 
@@ -253,7 +256,6 @@ export default function AdminChat() {
         </View>
       </View>
 
-      {/* Pinned flow status */}
       <View style={styles.aiMetaRow}>
         <View style={[styles.pill, isPinned ? styles.pillGreen : styles.pillGray]}>
           <Text style={styles.pillText}>{isPinned ? "Pinned flow: ON" : "Pinned flow: OFF"}</Text>
@@ -340,7 +342,7 @@ export default function AdminChat() {
             ref={listRef}
             data={messages}
             keyExtractor={(m) => m.id}
-            contentContainerStyle={[styles.list, { paddingBottom: INPUT_BAR_EST_HEIGHT + 16 }]}
+            contentContainerStyle={[styles.list, { paddingBottom: INPUT_BAR_EST_HEIGHT + 16 + safeBottom }]}
             ListHeaderComponent={customerId ? AiHeader : null}
             onContentSizeChange={() => scrollToBottom()}
             keyboardShouldPersistTaps="handled"
@@ -356,7 +358,13 @@ export default function AdminChat() {
           />
         )}
 
-        <View style={[styles.inputWrap, keyboardOpen ? { paddingBottom: 28 } : null]}>
+        <View
+          style={[
+            styles.inputWrap,
+            { paddingBottom: 12 + safeBottom },
+            keyboardOpen ? { paddingBottom: 28 + safeBottom } : null,
+          ]}
+        >
           <TextInput
             value={text}
             onChangeText={setText}

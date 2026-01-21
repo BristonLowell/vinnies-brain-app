@@ -1,15 +1,21 @@
 import { useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
-import {
-  View,
-  Text,
-  Pressable,
-  StyleSheet,
-  ActivityIndicator,
-  StatusBar,
-} from "react-native";
+import { View, Text, Pressable, StyleSheet, ActivityIndicator, StatusBar, Image } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { getOrCreateSession } from "../src/api";
+
+const BRAND = {
+  bg: "#071018",
+  navy: "#043553",
+  cream: "#F1EEDB",
+  surface: "rgba(255,255,255,0.06)",
+  border: "rgba(255,255,255,0.10)",
+  muted: "rgba(255,255,255,0.70)",
+  faint: "rgba(255,255,255,0.45)",
+};
+
+const VINNIES_LOGO_URI =
+  "https://images.squarespace-cdn.com/content/v1/661d985f1ab48c261e33cff9/584e4ae4-e0ca-4dd5-abb7-5944ac019238/VINNIES%2BLogo%2Bwith%2Bnew%2Brivets%281%29.png";
 
 export default function Welcome() {
   const router = useRouter();
@@ -25,52 +31,43 @@ export default function Welcome() {
     })();
   }, []);
 
-  const subtitle = useMemo(
-    () => "Guided troubleshooting for Airstreams (2010–2025).",
-    []
-  );
+  const subtitle = useMemo(() => "Guided troubleshooting for Airstreams (2010–2025).", []);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <StatusBar barStyle="light-content" />
 
-      {/* Subtle background glow */}
+      {/* background glows */}
       <View pointerEvents="none" style={styles.bgGlowTop} />
       <View pointerEvents="none" style={styles.bgGlowBottom} />
 
       <View style={styles.container}>
-        {/* Logo / Title */}
         <Pressable
           onLongPress={() => router.push("/admin")}
           delayLongPress={550}
-          style={({ pressed }) => [
-            styles.brandWrap,
-            pressed && { opacity: 0.9, transform: [{ scale: 0.99 }] },
-          ]}
+          style={({ pressed }) => [styles.brandWrap, pressed && { opacity: 0.9, transform: [{ scale: 0.99 }] }]}
         >
-          <View style={styles.logoCircle}>
-            <Text style={styles.logoText}>VB</Text>
+          <View style={styles.logoCard}>
+            <Image source={{ uri: VINNIES_LOGO_URI }} style={styles.logo} resizeMode="contain" />
           </View>
 
           <Text style={styles.title}>Vinnie’s Brain</Text>
           <Text style={styles.subtitle}>{subtitle}</Text>
-
           <Text style={styles.adminHint}>Long-press the logo for Admin</Text>
         </Pressable>
 
-        {/* Main card */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Start here</Text>
           <Text style={styles.cardBody}>
-            Pick your Airstream year, then answer a few questions. I’ll guide you to the
-            most likely cause and the next best steps.
+            Pick your Airstream year, then answer a few questions. I’ll guide you to the most likely cause and the next
+            best steps.
           </Text>
 
           <Pressable
             style={({ pressed }) => [
               styles.primaryBtn,
-              pressed && ready && styles.primaryBtnPressed,
-              !ready && styles.primaryBtnDisabled,
+              pressed && ready && { opacity: 0.92, transform: [{ scale: 0.99 }] },
+              !ready && { opacity: 0.45 },
             ]}
             disabled={!ready}
             onPress={() => router.push("/year")}
@@ -88,7 +85,7 @@ export default function Welcome() {
           </Pressable>
 
           <Text style={styles.microHint}>
-            Tip: Include where it is (roof/window/floor), when it happens, and whether it’s dripping.
+            Tip: include where it is (roof/window/floor), when it happens, and whether it’s dripping.
           </Text>
         </View>
       </View>
@@ -97,26 +94,25 @@ export default function Welcome() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#0B0F14" },
+  safe: { flex: 1, backgroundColor: BRAND.bg },
 
-  // soft glows
   bgGlowTop: {
     position: "absolute",
-    top: -140,
-    left: -90,
-    width: 340,
-    height: 340,
+    top: -150,
+    left: -110,
+    width: 360,
+    height: 360,
     borderRadius: 999,
-    backgroundColor: "rgba(37,99,235,0.18)",
+    backgroundColor: "rgba(4,53,83,0.25)",
   },
   bgGlowBottom: {
     position: "absolute",
-    bottom: -160,
-    right: -120,
-    width: 420,
-    height: 420,
+    bottom: -170,
+    right: -130,
+    width: 460,
+    height: 460,
     borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: "rgba(241,238,219,0.06)",
   },
 
   container: {
@@ -128,58 +124,44 @@ const styles = StyleSheet.create({
     gap: 16,
   },
 
-  brandWrap: {
-    alignItems: "center",
-    gap: 8,
-    marginBottom: 6,
-  },
-  logoCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: "rgba(255,255,255,0.08)",
+  brandWrap: { alignItems: "center", gap: 10, marginBottom: 6 },
+  logoCard: {
+    height: 62,
+    width: 180,
+    borderRadius: 18,
+    backgroundColor: BRAND.surface,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    borderColor: BRAND.border,
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: 14,
   },
-  logoText: { color: "rgba(255,255,255,0.9)", fontWeight: "900", fontSize: 18 },
+  logo: { width: 150, height: 28 },
 
   title: { color: "white", fontSize: 34, fontWeight: "900", letterSpacing: -0.3 },
-  subtitle: { color: "rgba(255,255,255,0.65)", fontSize: 14, textAlign: "center" },
-  adminHint: {
-    marginTop: 4,
-    color: "rgba(255,255,255,0.35)",
-    fontSize: 11,
-  },
+  subtitle: { color: BRAND.muted, fontSize: 14, textAlign: "center" },
+  adminHint: { marginTop: 2, color: "rgba(255,255,255,0.35)", fontSize: 11 },
 
   card: {
     borderRadius: 18,
     padding: 16,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: BRAND.surface,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
+    borderColor: BRAND.border,
     gap: 12,
   },
-  cardTitle: { color: "white", fontSize: 16, fontWeight: "900" },
-  cardBody: { color: "rgba(255,255,255,0.72)", fontSize: 13, lineHeight: 18 },
+  cardTitle: { color: BRAND.cream, fontSize: 16, fontWeight: "900" },
+  cardBody: { color: "rgba(255,255,255,0.75)", fontSize: 13, lineHeight: 18 },
 
   primaryBtn: {
     height: 52,
     borderRadius: 16,
-    backgroundColor: "white",
+    backgroundColor: BRAND.cream,
     alignItems: "center",
     justifyContent: "center",
   },
   primaryBtnInner: { flexDirection: "row", gap: 10, alignItems: "center" },
-  primaryBtnPressed: { opacity: 0.92 },
-  primaryBtnDisabled: { opacity: 0.45 },
-  primaryBtnText: { color: "#0B0F14", fontWeight: "900", fontSize: 15 },
+  primaryBtnText: { color: BRAND.navy, fontWeight: "900", fontSize: 15 },
 
-  microHint: {
-    marginTop: 2,
-    color: "rgba(255,255,255,0.45)",
-    fontSize: 11,
-    lineHeight: 15,
-  },
+  microHint: { marginTop: 2, color: BRAND.faint, fontSize: 11, lineHeight: 15 },
 });

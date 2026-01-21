@@ -12,8 +12,18 @@ import {
   ActivityIndicator,
   Keyboard,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { getOrCreateSession, liveChatHistory, liveChatSend } from "../src/api";
+
+const BRAND = {
+  bg: "#071018",
+  surface: "rgba(255,255,255,0.06)",
+  border: "rgba(255,255,255,0.10)",
+  navy: "#043553",
+  cream: "#F1EEDB",
+  text: "rgba(255,255,255,0.92)",
+  muted: "rgba(255,255,255,0.70)",
+};
 
 type Msg = {
   id: string;
@@ -27,6 +37,9 @@ const INPUT_BAR_EST_HEIGHT = 76;
 const IOS_KEYBOARD_OFFSET = 120;
 
 export default function LiveChat() {
+  const insets = useSafeAreaInsets();
+  const safeBottom = Math.max(insets.bottom, 12);
+
   const [keyboardOpen, setKeyboardOpen] = useState(false);
 
   const [sessionId, setSessionId] = useState<string>("");
@@ -77,8 +90,7 @@ export default function LiveChat() {
           requestAnimationFrame(scrollToBottom);
         }
       } catch (e: any) {
-        const msg = String(e?.message ?? "Failed to load live chat.");
-        setError(msg);
+        setError(String(e?.message ?? "Failed to load live chat."));
       }
     },
     [scrollToBottom]
@@ -119,9 +131,7 @@ export default function LiveChat() {
 
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
 
-    pollTimerRef.current = setInterval(() => {
-      refresh(sessionId);
-    }, 2000);
+    pollTimerRef.current = setInterval(() => refresh(sessionId), 2000);
 
     return () => {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
@@ -129,9 +139,7 @@ export default function LiveChat() {
     };
   }, [sessionId, refresh]);
 
-  const canSend = useMemo(() => {
-    return text.trim().length > 0 && ready && !!sessionId && !loading;
-  }, [text, ready, sessionId, loading]);
+  const canSend = useMemo(() => text.trim().length > 0 && ready && !!sessionId && !loading, [text, ready, sessionId, loading]);
 
   async function send() {
     try {
@@ -177,7 +185,7 @@ export default function LiveChat() {
             ref={listRef}
             data={messages}
             keyExtractor={(m) => m.id}
-            contentContainerStyle={[styles.list, { paddingBottom: INPUT_BAR_EST_HEIGHT + 16 }]}
+            contentContainerStyle={[styles.list, { paddingBottom: INPUT_BAR_EST_HEIGHT + 16 + safeBottom }]}
             keyboardShouldPersistTaps="handled"
             onContentSizeChange={() => scrollToBottom()}
             renderItem={({ item }) => {
@@ -191,8 +199,13 @@ export default function LiveChat() {
           />
         )}
 
-        {/* ✅ was iOS-only; now applies on Android too */}
-        <View style={[styles.inputWrap, keyboardOpen ? { paddingBottom: 28 } : null]}>
+        <View
+          style={[
+            styles.inputWrap,
+            { paddingBottom: 12 + safeBottom },
+            keyboardOpen ? { paddingBottom: 28 + safeBottom } : null,
+          ]}
+        >
           <TextInput
             value={text}
             onChangeText={setText}
@@ -212,14 +225,14 @@ export default function LiveChat() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#0B0F14" },
+  safe: { flex: 1, backgroundColor: BRAND.bg },
   header: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 8 },
-  title: { color: "white", fontSize: 18, fontWeight: "900" },
-  sub: { marginTop: 2, color: "rgba(255,255,255,0.65)" },
+  title: { color: BRAND.cream, fontSize: 18, fontWeight: "900" },
+  sub: { marginTop: 2, color: BRAND.muted },
   meta: { marginTop: 6, color: "rgba(255,255,255,0.45)", fontSize: 12, fontWeight: "700" },
 
   loadingWrap: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10 },
-  loadingText: { color: "rgba(255,255,255,0.75)", fontWeight: "800" },
+  loadingText: { color: BRAND.muted, fontWeight: "800" },
 
   errorBox: {
     marginHorizontal: 14,
@@ -227,25 +240,25 @@ const styles = StyleSheet.create({
     padding: 10,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "rgba(239,68,68,0.35)",
-    backgroundColor: "rgba(239,68,68,0.12)",
+    borderColor: "rgba(241,238,219,0.20)",
+    backgroundColor: "rgba(241,238,219,0.08)",
   },
-  errorText: { color: "white", fontWeight: "800" },
+  errorText: { color: BRAND.cream, fontWeight: "900" },
 
   list: { paddingHorizontal: 14, paddingVertical: 10, gap: 10, flexGrow: 1 },
 
   bubble: { maxWidth: "82%", padding: 12, borderRadius: 16, borderWidth: 1 },
-  mine: { alignSelf: "flex-end", backgroundColor: "#2563EB", borderColor: "rgba(255,255,255,0.10)" },
-  theirs: { alignSelf: "flex-start", backgroundColor: "#111827", borderColor: "rgba(255,255,255,0.10)" },
-  msgText: { color: "white", fontSize: 15, lineHeight: 20 },
+  mine: { alignSelf: "flex-end", backgroundColor: BRAND.navy, borderColor: "rgba(241,238,219,0.18)" },
+  theirs: { alignSelf: "flex-start", backgroundColor: "rgba(255,255,255,0.05)", borderColor: BRAND.border },
+  msgText: { color: BRAND.text, fontSize: 15, lineHeight: 20 },
 
   inputWrap: {
     flexDirection: "row",
     gap: 10,
     padding: 12,
     borderTopWidth: 1,
-    borderTopColor: "rgba(255,255,255,0.08)",
-    backgroundColor: "#0B0F14",
+    borderTopColor: BRAND.border,
+    backgroundColor: BRAND.bg,
     alignItems: "flex-end",
   },
   input: {
@@ -258,18 +271,18 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: BRAND.surface,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
+    borderColor: BRAND.border,
   },
   btn: {
     height: 44,
     paddingHorizontal: 16,
     borderRadius: 14,
-    backgroundColor: "white",
+    backgroundColor: BRAND.cream,
     alignItems: "center",
     justifyContent: "center",
   },
   btnDisabled: { opacity: 0.4 },
-  btnText: { color: "#0B0F14", fontWeight: "900" },
+  btnText: { color: BRAND.navy, fontWeight: "900" },
 });

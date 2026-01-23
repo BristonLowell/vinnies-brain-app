@@ -5,6 +5,35 @@ import type { CreateSessionResponse, ChatResponse, EscalationResponse } from "./
 const SESSION_KEY = "vinniesbrain_session_id";
 const ADMIN_KEY = "vinniesbrain_admin_key";
 
+// NEW: login bridge (temporary until JWT auth)
+// Store a UUID user id after login; http() will automatically send it as X-User-Id.
+const USER_ID_KEY = "vinniesbrain_user_id";
+
+export type SessionListItem = {
+  session_id: string;
+  last_message_at?: string | null;
+  preview?: string | null;
+};
+
+export type SessionListResponse = {
+  sessions: SessionListItem[];
+};
+
+export type ClaimSessionsResponse = {
+  ok: boolean;
+  claimed: number;
+};
+
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  try {
+    const uid = await AsyncStorage.getItem(USER_ID_KEY);
+    if (uid && uid.trim().length > 0) {
+      return { "X-User-Id": uid.trim() };
+    }
+  } catch {}
+  return {};
+}
+
 async function http<T>(
   path: string,
   opts?: { body?: any; headers?: Record<string, string>; method?: string }
@@ -12,10 +41,14 @@ async function http<T>(
   const url = `${API_BASE_URL}${path}`;
   const method = opts?.method ?? (opts?.body ? "POST" : "GET");
 
+  // Auto-attach auth header unless caller already set it
+  const autoAuth = await getAuthHeaders();
+
   const res = await fetch(url, {
     method,
     headers: {
       "Content-Type": "application/json",
+      ...autoAuth,
       ...(opts?.headers ?? {}),
     },
     body: opts?.body ? JSON.stringify(opts.body) : undefined,
@@ -30,6 +63,40 @@ async function http<T>(
 }
 
 // ----------------------------
+// Login / Subscription bridge helpers
+// ----------------------------
+export async function setCurrentUserId(userId: string) {
+  const uid = (userId || "").trim();
+  if (!uid) throw new Error("userId is empty");
+  await AsyncStorage.setItem(USER_ID_KEY, uid);
+}
+
+export async function getCurrentUserId() {
+  return (await AsyncStorage.getItem(USER_ID_KEY)) || "";
+}
+
+export async function clearCurrentUserId() {
+  await AsyncStorage.removeItem(USER_ID_KEY);
+}
+
+/**
+ * After login: claim any guest session IDs so they become part of the account.
+ * Call this ONCE right after login with the local issue session_ids you have saved.
+ */
+export async function claimSessions(sessionIds: string[]) {
+  const session_ids = (sessionIds || []).map((s) => (s || "").trim()).filter(Boolean);
+  return await http<ClaimSessionsResponse>("/v1/sessions/claim", { body: { session_ids } });
+}
+
+/**
+ * "Previous Issues" from the backend (account-synced).
+ * Use this instead of AsyncStorage once login is live.
+ */
+export async function listPreviousIssues() {
+  return await http<SessionListResponse>("/v1/sessions");
+}
+
+// ----------------------------
 // Sessions
 // ----------------------------
 // Supports BOTH styles:
@@ -41,7 +108,6 @@ export async function getOrCreateSession(opts?: {
   deleteOldMessages?: boolean;
 }) {
   const existing = await AsyncStorage.getItem(SESSION_KEY);
-
   const shouldReset = !!(opts?.forceNew || opts?.resetOld);
 
   // Rotate session (optional)
@@ -74,6 +140,34 @@ export async function getOrCreateSession(opts?: {
 
   await AsyncStorage.setItem(SESSION_KEY, created.session_id);
   return created.session_id;
+}
+
+/**
+ * Start a brand-new conversation (new session_id) and make it the active one.
+ * ✅ Does NOT delete or reset the previous session/messages on the backend.
+ * Use this for a "Start New Conversation" button.
+ */
+export async function startNewSession() {
+  const created = await http<CreateSessionResponse>("/v1/sessions", {
+    body: { channel: "mobile", mode: "customer" },
+  });
+
+  await AsyncStorage.setItem(SESSION_KEY, created.session_id);
+  return created.session_id;
+}
+
+/**
+ * Returns the currently stored session_id (if any) without creating a new one.
+ */
+export async function getSavedSessionId() {
+  return await AsyncStorage.getItem(SESSION_KEY);
+}
+
+/**
+ * Clears the locally stored session_id (does not delete anything on the backend).
+ */
+export async function clearSavedSessionId() {
+  await AsyncStorage.removeItem(SESSION_KEY);
 }
 
 /**

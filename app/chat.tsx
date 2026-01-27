@@ -74,24 +74,6 @@ function formatPreview(s: string) {
   return t.length > 70 ? t.slice(0, 70) + "…" : t;
 }
 
-function formatTime(ts: number) {
-  try {
-    const d = new Date(ts);
-    const now = new Date();
-    const sameDay =
-      d.getFullYear() === now.getFullYear() &&
-      d.getMonth() === now.getMonth() &&
-      d.getDate() === now.getDate();
-
-    if (sameDay) {
-      return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    }
-    return d.toLocaleDateString([], { month: "short", day: "numeric" });
-  } catch {
-    return "";
-  }
-}
-
 export default function Chat() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -108,8 +90,8 @@ export default function Chat() {
   const [sending, setSending] = useState(false);
   const [showEscalate, setShowEscalate] = useState(false);
 
+  // Kept (for Resume Current Issue & internal persistence)
   const [issues, setIssues] = useState<Issue[]>([]);
-  const [issuesOpen, setIssuesOpen] = useState(false);
 
   const listRef = useRef<FlatList<ChatItem>>(null);
   const inputRef = useRef<TextInput>(null);
@@ -120,20 +102,11 @@ export default function Chat() {
   }, [year]);
 
   // Legacy keys (single-convo per year)
-  const LEGACY_CHAT_ITEMS_KEY = useMemo(
-    () => `vinniesbrain_chat_items_${storageKeySuffix}`,
-    [storageKeySuffix]
-  );
-  const CHAT_SESSION_KEY = useMemo(
-    () => `vinniesbrain_chat_session_${storageKeySuffix}`,
-    [storageKeySuffix]
-  );
+  const LEGACY_CHAT_ITEMS_KEY = useMemo(() => `vinniesbrain_chat_items_${storageKeySuffix}`, [storageKeySuffix]);
+  const CHAT_SESSION_KEY = useMemo(() => `vinniesbrain_chat_session_${storageKeySuffix}`, [storageKeySuffix]);
 
   // New: issues index + per-session items key
-  const ISSUES_KEY = useMemo(
-    () => `vinniesbrain_issue_index_${storageKeySuffix}`,
-    [storageKeySuffix]
-  );
+  const ISSUES_KEY = useMemo(() => `vinniesbrain_issue_index_${storageKeySuffix}`, [storageKeySuffix]);
   const itemsKeyForSession = useCallback(
     (sid: string) => `vinniesbrain_chat_items_${storageKeySuffix}_${sid}`,
     [storageKeySuffix]
@@ -176,7 +149,6 @@ export default function Chat() {
           const nextItems = Array.isArray(parsed) && parsed.length > 0 ? parsed : [INITIAL_ASSISTANT];
           setItems(nextItems);
 
-          // restore escalate state based on last assistant meta
           const last = [...nextItems].reverse().find((x) => x.role === "assistant");
           setShowEscalate(!!last?.meta?.showEscalation);
           return;
@@ -231,16 +203,13 @@ export default function Chat() {
           }
         }
 
-        // keep newest first
         parsedIssues.sort((a, b) => (b.lastUpdatedAt || 0) - (a.lastUpdatedAt || 0));
         setIssues(parsedIssues);
 
         let sid = storedSid || "";
 
         // If no stored session, pick most recent issue if exists
-        if (!sid && parsedIssues.length > 0) {
-          sid = parsedIssues[0].sessionId;
-        }
+        if (!sid && parsedIssues.length > 0) sid = parsedIssues[0].sessionId;
 
         // If still none, create a new session
         if (!sid) {
@@ -258,7 +227,6 @@ export default function Chat() {
           return;
         }
 
-        // use existing
         setSessionId(sid);
         await AsyncStorage.setItem(CHAT_SESSION_KEY, sid);
         await loadItemsForSession(sid);
@@ -303,13 +271,13 @@ export default function Chat() {
       setIssues((prev) => {
         const next = [...prev];
         const idx = next.findIndex((x) => x.sessionId === sid);
-        const preview = typeof previewText === "string" ? formatPreview(previewText) : (idx >= 0 ? next[idx].preview : "");
+        const preview =
+          typeof previewText === "string" ? formatPreview(previewText) : idx >= 0 ? next[idx].preview : "";
         const updated: Issue = { sessionId: sid, lastUpdatedAt: now, preview };
 
         if (idx >= 0) next.splice(idx, 1);
         next.unshift(updated);
 
-        // persist (fire and forget)
         persistIssues(next);
         return next;
       });
@@ -317,23 +285,19 @@ export default function Chat() {
     [persistIssues]
   );
 
+  // Kept for future use (even though UI button is removed)
   async function onStartNewConversation() {
     if (sending) return;
 
     try {
       const newSid = await startNewSession();
 
-      // reset UI
       setSessionId(newSid);
       setItems([INITIAL_ASSISTANT]);
       setShowEscalate(false);
       setText("");
-      setIssuesOpen(false);
 
-      // mark as new issue
       await touchIssue(newSid, "");
-
-      // set as active session
       await AsyncStorage.setItem(CHAT_SESSION_KEY, newSid);
 
       scrollToBottom(false);
@@ -343,26 +307,6 @@ export default function Chat() {
         { role: "assistant", text: "Sorry — I couldn’t start a new conversation. Please try again." },
       ]);
     }
-  }
-
-  async function onSelectIssue(sid: string) {
-    if (sending) return;
-    if (!sid || sid === sessionId) {
-      setIssuesOpen(false);
-      return;
-    }
-
-    setSessionId(sid);
-    setIssuesOpen(false);
-    setShowEscalate(false);
-    setText("");
-
-    try {
-      await AsyncStorage.setItem(CHAT_SESSION_KEY, sid);
-    } catch {}
-
-    await loadItemsForSession(sid);
-    scrollToBottom(false);
   }
 
   async function onSend(msg?: string) {
@@ -382,7 +326,6 @@ export default function Chat() {
       const sid = sessionId || (await getOrCreateSession({ forceNew: true }));
       if (!sessionId) setSessionId(sid);
 
-      // Update issue preview with user's message
       await touchIssue(sid, message);
 
       const res = await sendChat(sid, message, year);
@@ -404,9 +347,6 @@ export default function Chat() {
       ]);
 
       setShowEscalate(!!res.show_escalation);
-
-      // If assistant answered something substantial and user message was empty preview,
-      // keep user preview as primary (already set). Just bump timestamp.
       await touchIssue(sid);
     } catch {
       setItems((prev) => [
@@ -434,65 +374,7 @@ export default function Chat() {
           <View style={StyleSheet.absoluteFill} pointerEvents="none" />
         </Pressable>
 
-        {/* Header + Start New + Previous Issues */}
-        <View style={styles.headerRow}>
-          <Pressable
-            onPress={() => setIssuesOpen((v) => !v)}
-            style={({ pressed }) => [styles.issuesBtn, pressed && { opacity: 0.9 }]}
-          >
-            <Text style={styles.issuesBtnText}>Previous Issues</Text>
-            <Text style={styles.issuesBtnSub}>
-              {issues.length > 0 ? `${issues.length} saved` : "none yet"}
-            </Text>
-          </Pressable>
-
-          <Pressable
-            onPress={onStartNewConversation}
-            disabled={sending}
-            style={({ pressed }) => [
-              styles.newChatBtn,
-              sending && { opacity: 0.5 },
-              pressed && !sending && { opacity: 0.85, transform: [{ scale: 0.98 }] },
-            ]}
-          >
-            <Text style={styles.newChatText}>Start New Issue</Text>
-          </Pressable>
-        </View>
-
-        {issuesOpen && (
-          <View style={styles.issuesPanel}>
-            {issues.length === 0 ? (
-              <Text style={styles.issuesEmpty}>No previous issues yet.</Text>
-            ) : (
-              issues.map((it) => {
-                const isActive = it.sessionId === sessionId;
-                return (
-                  <Pressable
-                    key={it.sessionId}
-                    onPress={() => onSelectIssue(it.sessionId)}
-                    style={({ pressed }) => [
-                      styles.issueRow,
-                      isActive && styles.issueRowActive,
-                      pressed && { opacity: 0.92 },
-                    ]}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.issueTitle}>
-                        {isActive ? "Current issue" : "Issue"}
-                        <Text style={styles.issueTime}> · {formatTime(it.lastUpdatedAt)}</Text>
-                      </Text>
-                      <Text style={styles.issuePreview} numberOfLines={2}>
-                        {it.preview || "Tap to open"}
-                      </Text>
-                    </View>
-
-                    <Text style={styles.issueChevron}>›</Text>
-                  </Pressable>
-                );
-              })
-            )}
-          </View>
-        )}
+        {/* Removed: Header + Start New + Previous Issues UI */}
 
         <FlatList
           ref={listRef}
@@ -522,7 +404,9 @@ export default function Chat() {
                 <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
                   {!isUser && parsed.hasBanner && (
                     <View style={styles.notFromVinniesBanner}>
-                      <Text style={styles.notFromVinniesText}>⚠️ This information is NOT from Vinnies Brain’s database.</Text>
+                      <Text style={styles.notFromVinniesText}>
+                        ⚠️ This information is NOT from Vinnies Brain’s database.
+                      </Text>
                     </View>
                   )}
 
@@ -554,7 +438,7 @@ export default function Chat() {
             onPress={() => router.push({ pathname: "/live-chat" })}
           >
             <Text style={styles.escalateText}>Chat with Vinnies now</Text>
-            <Text style={styles.escalateSub}>You’re chatting directly with the owner.</Text>
+            <Text style={styles.escalateSub}>You are chatting with Vinnies</Text>
           </Pressable>
         )}
 
@@ -695,66 +579,4 @@ const styles = StyleSheet.create({
   },
   sendBtnDisabled: { backgroundColor: "rgba(241,238,219,0.35)" },
   sendText: { color: BRAND.navy, fontWeight: "900" },
-
-  // Header / Issues UI
-  headerRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 14,
-    paddingTop: 8,
-    paddingBottom: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: BRAND.border,
-    backgroundColor: BRAND.bg,
-  },
-  issuesBtn: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-    backgroundColor: "rgba(255,255,255,0.05)",
-  },
-  issuesBtnText: { color: BRAND.cream, fontSize: 13, fontWeight: "900" },
-  issuesBtnSub: { marginTop: 2, color: BRAND.muted, fontSize: 11, fontWeight: "700" },
-
-  newChatBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 12,
-    backgroundColor: "rgba(241,238,219,0.12)",
-    borderWidth: 1,
-    borderColor: "rgba(241,238,219,0.25)",
-  },
-  newChatText: { color: BRAND.cream, fontSize: 12, fontWeight: "900" },
-
-  issuesPanel: {
-    marginHorizontal: 14,
-    marginTop: 10,
-    marginBottom: 6,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: BRAND.border,
-    backgroundColor: "rgba(255,255,255,0.04)",
-    overflow: "hidden",
-  },
-  issuesEmpty: { padding: 12, color: BRAND.muted, fontWeight: "800" },
-
-  issueRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderTopWidth: 1,
-    borderTopColor: "rgba(255,255,255,0.08)",
-    gap: 10,
-  },
-  issueRowActive: {
-    backgroundColor: "rgba(4,53,83,0.20)",
-  },
-  issueTitle: { color: BRAND.cream, fontWeight: "900", fontSize: 13 },
-  issueTime: { color: BRAND.muted, fontWeight: "800", fontSize: 12 },
-  issuePreview: { marginTop: 4, color: BRAND.muted, fontSize: 12, lineHeight: 16 },
-  issueChevron: { color: BRAND.cream, fontWeight: "900", fontSize: 20, opacity: 0.75 },
 });

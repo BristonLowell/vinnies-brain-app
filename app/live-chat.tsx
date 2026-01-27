@@ -165,7 +165,7 @@ export default function LiveChat() {
       >
         <View style={styles.header}>
           <Text style={styles.title}>Live chat with Vinnies</Text>
-          <Text style={styles.sub}>You’re chatting directly with the owner.</Text>
+          <Text style={styles.sub}>You are chatting with Vinnies</Text>
           {!!conversationId && <Text style={styles.meta}>Conversation: {conversationId.slice(0, 8)}…</Text>}
         </View>
 

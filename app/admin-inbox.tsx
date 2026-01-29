@@ -19,10 +19,14 @@ import * as Device from "expo-device";
 
 import {
   adminLiveChatConversations,
+  adminDeleteLiveChatConversation,
+  adminListAllSessions,
+  adminDeleteSession,
   clearAdminKey,
   getSavedAdminKey,
   saveAdminKey,
   type AdminConversationItem,
+  type AdminSessionItem,
 } from "../src/api";
 import { API_BASE_URL } from "../src/config";
 
@@ -47,17 +51,9 @@ Notifications.setNotificationHandler({
 });
 
 async function registerForPushAndSendToBackend(ownerId: string) {
-  if (!ownerId || ownerId.includes("PASTE_YOUR")) {
-    // Don’t crash; just skip until you paste it in
-    return;
-  }
+  if (!ownerId || ownerId.includes("PASTE_YOUR")) return;
+  if (!Device.isDevice) return;
 
-  if (!Device.isDevice) {
-    // Push tokens don’t work on simulators
-    return;
-  }
-
-  // Ask permission
   const existing = await Notifications.getPermissionsAsync();
   let status = existing.status;
 
@@ -68,7 +64,6 @@ async function registerForPushAndSendToBackend(ownerId: string) {
 
   if (status !== "granted") return;
 
-  // Needed on Android
   if (Platform.OS === "android") {
     await Notifications.setNotificationChannelAsync("default", {
       name: "default",
@@ -76,20 +71,13 @@ async function registerForPushAndSendToBackend(ownerId: string) {
     });
   }
 
-  // Get Expo push token
   const projectId =
-    // modern
     (Constants.expoConfig as any)?.extra?.eas?.projectId ||
-    // fallback
     (Constants as any)?.easConfig?.projectId;
 
-  const tokenResp = await Notifications.getExpoPushTokenAsync(
-    projectId ? { projectId } : undefined
-  );
-
+  const tokenResp = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
   const expoPushToken = tokenResp.data;
 
-  // Send to backend
   await fetch(`${API_BASE_URL}/v1/owner/push-token`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -97,15 +85,22 @@ async function registerForPushAndSendToBackend(ownerId: string) {
   });
 }
 
+type Tab = "live" | "ai";
+
 export default function AdminInbox() {
   const router = useRouter();
 
   const [adminKey, setAdminKeyState] = useState("");
   const [keyDraft, setKeyDraft] = useState("");
+
+  const [tab, setTab] = useState<Tab>("live");
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
-  const [items, setItems] = useState<AdminConversationItem[]>([]);
+
+  const [liveItems, setLiveItems] = useState<AdminConversationItem[]>([]);
+  const [aiItems, setAiItems] = useState<AdminSessionItem[]>([]);
 
   const mounted = useRef(true);
   const pushRegisteredRef = useRef(false);
@@ -120,9 +115,15 @@ export default function AdminInbox() {
         if (isRefresh) setRefreshing(true);
         else setLoading(true);
 
-        const res = await adminLiveChatConversations(adminKey.trim());
-        if (!mounted.current) return;
-        setItems(res.conversations || []);
+        if (tab === "live") {
+          const res = await adminLiveChatConversations(adminKey.trim());
+          if (!mounted.current) return;
+          setLiveItems(res.conversations || []);
+        } else {
+          const res = await adminListAllSessions(adminKey.trim());
+          if (!mounted.current) return;
+          setAiItems(res.sessions || []);
+        }
       } catch (e: any) {
         if (!mounted.current) return;
         setError(String(e?.message ?? "Failed to load inbox."));
@@ -132,7 +133,7 @@ export default function AdminInbox() {
         setRefreshing(false);
       }
     },
-    [adminKey, hasKey]
+    [adminKey, hasKey, tab]
   );
 
   useEffect(() => {
@@ -152,7 +153,7 @@ export default function AdminInbox() {
   useEffect(() => {
     if (!hasKey) return;
     load(false);
-  }, [hasKey, load]);
+  }, [hasKey, load, tab]);
 
   // ✅ Register push token after admin key exists (once per app launch; backend upserts)
   useEffect(() => {
@@ -164,7 +165,7 @@ export default function AdminInbox() {
     (async () => {
       try {
         await registerForPushAndSendToBackend(OWNER_ID);
-      } catch (e) {
+      } catch {
         // don't block inbox if push fails
       }
     })();
@@ -181,12 +182,57 @@ export default function AdminInbox() {
     await clearAdminKey();
     setAdminKeyState("");
     setKeyDraft("");
-    setItems([]);
+    setLiveItems([]);
+    setAiItems([]);
     setError("");
     pushRegisteredRef.current = false;
   }
 
-  const renderItem = ({ item }: { item: AdminConversationItem }) => {
+  async function confirmDeleteLive(conversationId: string) {
+    Alert.alert(
+      "Delete live chat?",
+      "This permanently deletes the live chat conversation and its messages.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await adminDeleteLiveChatConversation(adminKey.trim(), conversationId);
+              await load(true);
+            } catch (e: any) {
+              setError(String(e?.message ?? "Delete failed."));
+            }
+          },
+        },
+      ]
+    );
+  }
+
+  async function confirmDeleteSession(sessionId: string) {
+    Alert.alert(
+      "Delete AI session?",
+      "This permanently deletes the troubleshooting chat session and all its messages.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await adminDeleteSession(adminKey.trim(), sessionId);
+              await load(true);
+            } catch (e: any) {
+              setError(String(e?.message ?? "Delete failed."));
+            }
+          },
+        },
+      ]
+    );
+  }
+
+  const LiveRow = ({ item }: { item: AdminConversationItem }) => {
     const last = item.last_message;
     return (
       <Pressable
@@ -211,6 +257,58 @@ export default function AdminInbox() {
           )}
           {!!last?.created_at && <Text style={styles.rowMeta}>{fmt(last.created_at)}</Text>}
         </View>
+
+        <Pressable
+          onPress={() => confirmDeleteLive(item.conversation_id)}
+          style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.85 }]}
+          hitSlop={10}
+        >
+          <Text style={styles.deleteText}>Delete</Text>
+        </Pressable>
+
+        <Text style={styles.chev}>›</Text>
+      </Pressable>
+    );
+  };
+
+  const AiRow = ({ item }: { item: AdminSessionItem }) => {
+    const metaBits = [
+      typeof item.airstream_year === "number" ? String(item.airstream_year) : "",
+      item.category ? String(item.category) : "",
+    ].filter(Boolean);
+
+    return (
+      <Pressable
+        onPress={() =>
+          router.push({
+            pathname: "/admin-session",
+            params: { session_id: item.session_id },
+          })
+        }
+        style={({ pressed }) => [styles.row, pressed && { opacity: 0.92 }]}
+      >
+        <View style={{ flex: 1, gap: 6 }}>
+          <Text style={styles.rowTitle}>Session: {item.session_id?.slice(0, 8)}…</Text>
+
+          {!!metaBits.length && <Text style={styles.rowMeta}>{metaBits.join(" • ")}</Text>}
+
+          {!!item.preview && (
+            <Text style={styles.rowSub} numberOfLines={2}>
+              {item.preview}
+            </Text>
+          )}
+
+          {!!item.last_message_at && <Text style={styles.rowMeta}>{fmt(item.last_message_at)}</Text>}
+        </View>
+
+        <Pressable
+          onPress={() => confirmDeleteSession(item.session_id)}
+          style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.85 }]}
+          hitSlop={10}
+        >
+          <Text style={styles.deleteText}>Delete</Text>
+        </Pressable>
+
         <Text style={styles.chev}>›</Text>
       </Pressable>
     );
@@ -219,8 +317,10 @@ export default function AdminInbox() {
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <View style={styles.header}>
-        <Text style={styles.title}>Live Chat Inbox</Text>
-        <Text style={styles.sub}>Reply to customers as the owner.</Text>
+        <Text style={styles.title}>Admin Inbox</Text>
+        <Text style={styles.sub}>
+          {tab === "live" ? "Live chat conversations." : "All troubleshooting chats (QC)."}
+        </Text>
       </View>
 
       {!hasKey ? (
@@ -244,7 +344,7 @@ export default function AdminInbox() {
               pressed && keyDraft.trim() && { opacity: 0.92 },
             ]}
           >
-            <Text style={styles.btnText}>Unlock Inbox</Text>
+            <Text style={styles.btnText}>Unlock</Text>
           </Pressable>
 
           {!!error && <Text style={styles.error}>{error}</Text>}
@@ -252,12 +352,29 @@ export default function AdminInbox() {
       ) : (
         <>
           <View style={styles.toolbar}>
-            <Pressable onPress={() => load(true)} style={({ pressed }) => [styles.toolbarBtn, pressed && { opacity: 0.92 }]}>
-              <Text style={styles.toolbarText}>Refresh</Text>
-            </Pressable>
-            <Pressable onPress={logout} style={({ pressed }) => [styles.toolbarBtn, pressed && { opacity: 0.92 }]}>
-              <Text style={styles.toolbarText}>Change Key</Text>
-            </Pressable>
+            <View style={styles.tabs}>
+              <Pressable
+                onPress={() => setTab("live")}
+                style={({ pressed }) => [styles.tab, tab === "live" && styles.tabActive, pressed && { opacity: 0.92 }]}
+              >
+                <Text style={[styles.tabText, tab === "live" && styles.tabTextActive]}>Live Chats</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setTab("ai")}
+                style={({ pressed }) => [styles.tab, tab === "ai" && styles.tabActive, pressed && { opacity: 0.92 }]}
+              >
+                <Text style={[styles.tabText, tab === "ai" && styles.tabTextActive]}>All AI Chats</Text>
+              </Pressable>
+            </View>
+
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <Pressable onPress={() => load(true)} style={({ pressed }) => [styles.toolbarBtn, pressed && { opacity: 0.92 }]}>
+                <Text style={styles.toolbarText}>Refresh</Text>
+              </Pressable>
+              <Pressable onPress={logout} style={({ pressed }) => [styles.toolbarBtn, pressed && { opacity: 0.92 }]}>
+                <Text style={styles.toolbarText}>Change Key</Text>
+              </Pressable>
+            </View>
           </View>
 
           {!!error && (
@@ -269,19 +386,33 @@ export default function AdminInbox() {
           {loading ? (
             <View style={styles.loading}>
               <ActivityIndicator />
-              <Text style={styles.loadingText}>Loading conversations…</Text>
+              <Text style={styles.loadingText}>Loading…</Text>
             </View>
-          ) : (
+          ) : tab === "live" ? (
             <FlatList
-              data={items}
+              data={liveItems}
               keyExtractor={(x) => x.conversation_id}
               contentContainerStyle={styles.list}
-              renderItem={renderItem}
+              renderItem={({ item }) => <LiveRow item={item} />}
               refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} />}
               ListEmptyComponent={
                 <View style={styles.empty}>
                   <Text style={styles.emptyTitle}>No conversations yet</Text>
                   <Text style={styles.emptySub}>When customers message you, they’ll show up here.</Text>
+                </View>
+              }
+            />
+          ) : (
+            <FlatList
+              data={aiItems}
+              keyExtractor={(x) => x.session_id}
+              contentContainerStyle={styles.list}
+              renderItem={({ item }) => <AiRow item={item} />}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} />}
+              ListEmptyComponent={
+                <View style={styles.empty}>
+                  <Text style={styles.emptyTitle}>No sessions found</Text>
+                  <Text style={styles.emptySub}>This list shows all troubleshooting chats for QC.</Text>
                 </View>
               }
             />
@@ -333,7 +464,21 @@ const styles = StyleSheet.create({
 
   error: { color: "rgba(239,68,68,0.95)", fontWeight: "800" },
 
-  toolbar: { flexDirection: "row", gap: 10, paddingHorizontal: 16, paddingBottom: 10 },
+  toolbar: { paddingHorizontal: 16, paddingBottom: 10, gap: 10 },
+
+  tabs: {
+    flexDirection: "row",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    borderRadius: 16,
+    padding: 4,
+  },
+  tab: { flex: 1, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  tabActive: { backgroundColor: "rgba(255,255,255,0.14)" },
+  tabText: { color: "rgba(255,255,255,0.70)", fontWeight: "900", fontSize: 12 },
+  tabTextActive: { color: "white" },
+
   toolbarBtn: {
     height: 44,
     paddingHorizontal: 14,
@@ -377,6 +522,19 @@ const styles = StyleSheet.create({
   rowTitle: { color: "white", fontWeight: "900" },
   rowSub: { color: "rgba(255,255,255,0.70)", lineHeight: 18 },
   rowMeta: { color: "rgba(255,255,255,0.45)", fontSize: 12, fontWeight: "700" },
+
+  deleteBtn: {
+    height: 32,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: "rgba(239,68,68,0.16)",
+    borderWidth: 1,
+    borderColor: "rgba(239,68,68,0.28)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  deleteText: { color: "white", fontWeight: "900", fontSize: 12 },
+
   chev: { color: "rgba(255,255,255,0.55)", fontSize: 26, fontWeight: "900" },
 
   empty: { padding: 24, alignItems: "center", gap: 8 },

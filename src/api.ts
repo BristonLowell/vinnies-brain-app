@@ -310,3 +310,43 @@ export async function adminLiveChatSend(adminKey: string, conversationId: string
     body: { conversation_id: conversationId, body },
   });
 }
+
+// ----------------------------
+// Admin: Quality control (all AI sessions) + deletes
+// ----------------------------
+export type AdminSessionItem = {
+  session_id: string;
+  user_id?: string | null;
+  channel?: string | null;
+  mode?: string | null;
+  airstream_year?: number | null;
+  category?: string | null;
+  created_at?: string | null;
+  last_message_at?: string | null;
+  preview?: string | null;
+};
+
+export type AdminSessionsResponse = {
+  sessions: AdminSessionItem[];
+};
+
+export async function adminListAllSessions(adminKey: string) {
+  return await http<AdminSessionsResponse>("/v1/admin/sessions", {
+    headers: { "X-Admin-Key": adminKey },
+  });
+}
+
+export async function adminDeleteSession(adminKey: string, sessionId: string) {
+  return await http<{ ok: boolean }>(`/v1/admin/sessions/${sessionId}`, {
+    headers: { "X-Admin-Key": adminKey },
+    method: "DELETE",
+  });
+}
+
+export async function adminDeleteLiveChatConversation(adminKey: string, conversationId: string) {
+  return await http<{ ok: boolean }>(`/v1/admin/livechat/conversations/${conversationId}`, {
+    headers: { "X-Admin-Key": adminKey },
+    method: "DELETE",
+  });
+}
+

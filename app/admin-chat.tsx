@@ -9,6 +9,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Alert,
   InteractionManager,
   Keyboard,
 } from "react-native";
@@ -17,6 +18,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import {
   adminLiveChatHistory,
   adminLiveChatSend,
+  adminDeleteLiveChatConversation,
   getSavedAdminKey,
   type LiveChatHistoryResponse,
 } from "../src/api";
@@ -198,6 +200,33 @@ export default function AdminChat() {
     };
   }, [adminKey, conversationId, refresh]);
 
+
+
+  async function confirmDeleteConversation() {
+    if (!adminKey || !conversationId) return;
+
+    Alert.alert(
+      "Delete live chat?",
+      "This permanently deletes the live chat conversation and its messages.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              setError("");
+              await adminDeleteLiveChatConversation(adminKey, conversationId);
+              router.back();
+            } catch (e: any) {
+              setError(String(e?.message ?? "Delete failed."));
+            }
+          },
+        },
+      ]
+    );
+  }
+
   const canSend = useMemo(() => {
     return !!adminKey && !!conversationId && !sending && text.trim().length > 0;
   }, [adminKey, conversationId, sending, text]);
@@ -315,6 +344,17 @@ export default function AdminChat() {
           {!!customerId && <Text style={styles.meta}>Session: {customerId.slice(0, 8)}…</Text>}
           <Text style={styles.meta}>Conversation: {conversationId.slice(0, 8)}…</Text>
 
+
+          <View style={styles.headerBtns}>
+            <Pressable style={styles.smallBtn} onPress={() => router.back()}>
+              <Text style={styles.smallBtnText}>Back</Text>
+            </Pressable>
+            <Pressable style={[styles.smallBtn, styles.dangerBtn]} onPress={confirmDeleteConversation}>
+              <Text style={styles.smallBtnText}>Delete chat</Text>
+            </Pressable>
+          </View>
+
+
           {!!customerId && (
             <Pressable
               style={styles.refreshAiBtn}
@@ -389,6 +429,23 @@ const styles = StyleSheet.create({
   title: { color: "white", fontSize: 18, fontWeight: "900" },
   sub: { marginTop: 2, color: "rgba(255,255,255,0.65)" },
   meta: { marginTop: 4, color: "rgba(255,255,255,0.45)", fontSize: 12, fontWeight: "700" },
+
+  headerBtns: { flexDirection: "row", gap: 10, marginTop: 10 },
+  smallBtn: {
+    height: 36,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.10)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  dangerBtn: {
+    backgroundColor: "rgba(239,68,68,0.16)",
+    borderColor: "rgba(239,68,68,0.28)",
+  },
+  smallBtnText: { color: "white", fontWeight: "900", fontSize: 12 },
 
   refreshAiBtn: {
     marginTop: 10,

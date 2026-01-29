@@ -25,10 +25,7 @@ export default function Year() {
 
   const listRef = useRef<FlatList<number>>(null);
 
-  useEffect(() => {
-    // don't block UI if this fails
-    getOrCreateSession().catch((e) => console.log("getOrCreateSession error:", e));
-  }, []);
+  
 
   useEffect(() => {
     requestAnimationFrame(() => {
@@ -65,10 +62,12 @@ export default function Year() {
     // IMPORTANT: never block navigation on setContext
     if (sid) {
       try {
-        await setContext(sid, { airstream_year: selected }); // year set, category undefined
+        // ensure backend sees the session before updating context
+        await new Promise(res => setTimeout(res, 50));
+        await setContext(sid, { airstream_year: selected });
       } catch (e) {
         console.log("setContext failed (non-fatal):", e);
-      }
+     }
     }
 
     // Navigate no matter what

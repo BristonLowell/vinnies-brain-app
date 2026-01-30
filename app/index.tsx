@@ -10,7 +10,6 @@ import {
   Image,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getOrCreateSession } from "../src/api";
 
 const BRAND = {
@@ -30,16 +29,14 @@ const BRAND = {
 const VINNIES_LOGO_URI =
   "https://images.squarespace-cdn.com/content/v1/661d985f1ab48c261e33cff9/584e4ae4-e0ca-4dd5-abb7-5944ac019238/VINNIES%2BLogo%2Bwith%2Bnew%2Brivets%281%29.png";
 
-const LAST_YEAR_KEY = "vinniesbrain_last_year";
-
-export default function Welcome() {
+export default function Index() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
-  const [canResume, setCanResume] = useState(false);
 
   useEffect(() => {
     (async () => {
       try {
+        // warm session (non-blocking safety)
         await getOrCreateSession();
       } finally {
         setReady(true);
@@ -47,37 +44,16 @@ export default function Welcome() {
     })();
   }, []);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const y = await AsyncStorage.getItem(LAST_YEAR_KEY);
-        setCanResume(!!y);
-      } catch {
-        setCanResume(false);
-      }
-    })();
-  }, []);
-
   function startTroubleshooting() {
+    // Always start a fresh flow
     router.push({ pathname: "/year", params: { new: "1" } });
-  }
-
-  async function resumeCurrentIssue() {
-    try {
-      const y = await AsyncStorage.getItem(LAST_YEAR_KEY);
-      if (y) {
-        router.push({ pathname: "/chat", params: { year: String(y) } });
-        return;
-      }
-    } catch {}
-    router.push("/year");
   }
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <StatusBar barStyle="light-content" />
 
-      {/* Admin gear */}
+      {/* Admin gear (kept) */}
       <Pressable
         onPress={() => router.push("/admin")}
         style={({ pressed }) => [
@@ -94,7 +70,6 @@ export default function Welcome() {
       <View pointerEvents="none" style={styles.glowBottom} />
 
       <View style={styles.container}>
-        {/* Header */}
         <View style={styles.header}>
           <View style={styles.logoCard}>
             <Image source={{ uri: VINNIES_LOGO_URI }} style={styles.logo} resizeMode="contain" />
@@ -104,9 +79,8 @@ export default function Welcome() {
           <Text style={styles.subtitle}>Guided troubleshooting for Airstreams</Text>
         </View>
 
-        {/* Main Card */}
         <View style={styles.mainCard}>
-          <Text style={styles.cardTitle}>What would you like to do?</Text>
+          <Text style={styles.cardTitle}>Let’s fix it.</Text>
 
           <Pressable
             onPress={startTroubleshooting}
@@ -128,19 +102,6 @@ export default function Welcome() {
               )}
             </View>
             <Text style={styles.btnSub}>Start a new issue</Text>
-          </Pressable>
-
-          <Pressable
-            onPress={resumeCurrentIssue}
-            disabled={!ready || !canResume}
-            style={({ pressed }) => [
-              styles.secondaryBtn,
-              pressed && ready && canResume && { opacity: 0.92, transform: [{ scale: 0.99 }] },
-              (!ready || !canResume) && { opacity: 0.38 },
-            ]}
-          >
-            <Text style={styles.secondaryText}>Resume Current Issue</Text>
-            <Text style={styles.btnSub}>Continue where you left off</Text>
           </Pressable>
 
           <View style={styles.tipBox}>
@@ -242,19 +203,13 @@ const styles = StyleSheet.create({
   },
   btnRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10 },
   primaryText: { color: BRAND.navy, fontWeight: "900", fontSize: 16 },
-
-  secondaryBtn: {
-    borderRadius: 18,
-    backgroundColor: "rgba(241,238,219,0.10)",
-    borderWidth: 1,
-    borderColor: BRAND.borderStrong,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    alignItems: "center",
+  btnSub: {
+    marginTop: 6,
+    color: "rgba(7,16,24,0.72)",
+    fontSize: 11,
+    fontWeight: "800",
+    textAlign: "center",
   },
-  secondaryText: { color: BRAND.cream, fontWeight: "900", fontSize: 16 },
-
-  btnSub: { marginTop: 6, color: "rgba(7,16,24,0.72)", fontSize: 11, fontWeight: "800", textAlign: "center" },
 
   tipBox: {
     marginTop: 2,

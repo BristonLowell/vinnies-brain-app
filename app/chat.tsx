@@ -15,7 +15,7 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { getOrCreateSession, sendChat, startNewSession } from "../src/api";
+import { getOrCreateSession, sendChat } from "../src/api";
 
 const BRAND = {
   bg: "#071018",
@@ -35,12 +35,6 @@ type ChatItem = {
     showEscalation?: boolean;
     clarifyingQuestion?: string;
   };
-};
-
-type Issue = {
-  sessionId: string;
-  lastUpdatedAt: number; // epoch ms
-  preview: string; // short snippet
 };
 
 const INITIAL_ASSISTANT: ChatItem = {
@@ -68,12 +62,6 @@ function initials(label: string) {
   return parts.map((p) => p[0]?.toUpperCase()).join("");
 }
 
-function formatPreview(s: string) {
-  const t = (s || "").replace(/\s+/g, " ").trim();
-  if (!t) return "";
-  return t.length > 70 ? t.slice(0, 70) + "…" : t;
-}
-
 export default function Chat() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -90,27 +78,10 @@ export default function Chat() {
   const [sending, setSending] = useState(false);
   const [showEscalate, setShowEscalate] = useState(false);
 
-  // Kept (for Resume Current Issue & internal persistence)
-  const [issues, setIssues] = useState<Issue[]>([]);
-
   const listRef = useRef<FlatList<ChatItem>>(null);
   const inputRef = useRef<TextInput>(null);
 
-  const storageKeySuffix = useMemo(() => {
-    const y = year ? String(year) : "any";
-    return `y:${y}`;
-  }, [year]);
-
-  // Legacy keys (single-convo per year)
-  const LEGACY_CHAT_ITEMS_KEY = useMemo(() => `vinniesbrain_chat_items_${storageKeySuffix}`, [storageKeySuffix]);
-  const CHAT_SESSION_KEY = useMemo(() => `vinniesbrain_chat_session_${storageKeySuffix}`, [storageKeySuffix]);
-
-  // New: issues index + per-session items key
-  const ISSUES_KEY = useMemo(() => `vinniesbrain_issue_index_${storageKeySuffix}`, [storageKeySuffix]);
-  const itemsKeyForSession = useCallback(
-    (sid: string) => `vinniesbrain_chat_items_${storageKeySuffix}_${sid}`,
-    [storageKeySuffix]
-  );
+  const ITEMS_KEY = useMemo(() => (sessionId ? `vinniesbrain_chat_items_${sessionId}` : ""), [sessionId]);
 
   useEffect(() => {
     const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardOpen(true));
@@ -129,213 +100,75 @@ export default function Chat() {
     scrollToBottom(true);
   }, [items.length, scrollToBottom]);
 
-  const persistIssues = useCallback(
-    async (next: Issue[]) => {
-      try {
-        await AsyncStorage.setItem(ISSUES_KEY, JSON.stringify(next));
-      } catch {}
-    },
-    [ISSUES_KEY]
-  );
-
-  const loadItemsForSession = useCallback(
-    async (sid: string) => {
-      // Load per-session items; if none, try legacy and migrate
-      try {
-        const key = itemsKeyForSession(sid);
-        const stored = await AsyncStorage.getItem(key);
-        if (stored) {
-          const parsed = JSON.parse(stored) as ChatItem[];
-          const nextItems = Array.isArray(parsed) && parsed.length > 0 ? parsed : [INITIAL_ASSISTANT];
-          setItems(nextItems);
-
-          const last = [...nextItems].reverse().find((x) => x.role === "assistant");
-          setShowEscalate(!!last?.meta?.showEscalation);
-          return;
-        }
-
-        // migrate legacy, if present
-        const legacy = await AsyncStorage.getItem(LEGACY_CHAT_ITEMS_KEY);
-        if (legacy) {
-          try {
-            const parsedLegacy = JSON.parse(legacy) as ChatItem[];
-            const nextItems =
-              Array.isArray(parsedLegacy) && parsedLegacy.length > 0 ? parsedLegacy : [INITIAL_ASSISTANT];
-            setItems(nextItems);
-            await AsyncStorage.setItem(key, JSON.stringify(nextItems));
-            await AsyncStorage.removeItem(LEGACY_CHAT_ITEMS_KEY);
-
-            const last = [...nextItems].reverse().find((x) => x.role === "assistant");
-            setShowEscalate(!!last?.meta?.showEscalation);
-            return;
-          } catch {
-            // ignore
-          }
-        }
-      } catch {}
-
-      setItems([INITIAL_ASSISTANT]);
-      setShowEscalate(false);
-    },
-    [itemsKeyForSession, LEGACY_CHAT_ITEMS_KEY]
-  );
-
-  // Initial load: issues index + last session + items
+  // Load the session that was created on the Year page (SESSION_KEY),
+  // and load chat items for that session if present.
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
       try {
-        const [issuesRaw, storedSid] = await Promise.all([
-          AsyncStorage.getItem(ISSUES_KEY),
-          AsyncStorage.getItem(CHAT_SESSION_KEY),
-        ]);
-
+        const sid = await getOrCreateSession(); // ✅ reuse the current active session
         if (cancelled) return;
 
-        let parsedIssues: Issue[] = [];
-        if (issuesRaw) {
-          try {
-            const p = JSON.parse(issuesRaw) as Issue[];
-            parsedIssues = Array.isArray(p) ? p : [];
-          } catch {
-            parsedIssues = [];
-          }
-        }
-
-        parsedIssues.sort((a, b) => (b.lastUpdatedAt || 0) - (a.lastUpdatedAt || 0));
-        setIssues(parsedIssues);
-
-        let sid = storedSid || "";
-
-        // If no stored session, pick most recent issue if exists
-        if (!sid && parsedIssues.length > 0) sid = parsedIssues[0].sessionId;
-
-        // If still none, create a new session
-        if (!sid) {
-          sid = await getOrCreateSession({ forceNew: true });
-          if (cancelled) return;
-
-          const now = Date.now();
-          const nextIssues: Issue[] = [{ sessionId: sid, lastUpdatedAt: now, preview: "" }, ...parsedIssues];
-          setIssues(nextIssues);
-          await persistIssues(nextIssues);
-
-          setSessionId(sid);
-          await AsyncStorage.setItem(CHAT_SESSION_KEY, sid);
-          await loadItemsForSession(sid);
-          return;
-        }
-
         setSessionId(sid);
-        await AsyncStorage.setItem(CHAT_SESSION_KEY, sid);
-        await loadItemsForSession(sid);
+
+        // Load saved items for this session (if any)
+        try {
+          const raw = await AsyncStorage.getItem(`vinniesbrain_chat_items_${sid}`);
+          if (raw) {
+            const parsed = JSON.parse(raw) as ChatItem[];
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setItems(parsed);
+
+              const last = [...parsed].reverse().find((x) => x.role === "assistant");
+              setShowEscalate(!!last?.meta?.showEscalation);
+              return;
+            }
+          }
+        } catch {}
+
+        setItems([INITIAL_ASSISTANT]);
+        setShowEscalate(false);
       } catch {
         setItems([INITIAL_ASSISTANT]);
         setShowEscalate(false);
-        try {
-          const sid = await getOrCreateSession({ forceNew: true });
-          if (!cancelled) setSessionId(sid);
-        } catch {}
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [ISSUES_KEY, CHAT_SESSION_KEY, persistIssues, loadItemsForSession]);
+  }, []);
 
-  // Persist items to per-session key whenever items change
+  // Persist items per session
   useEffect(() => {
+    if (!ITEMS_KEY) return;
     (async () => {
-      if (!sessionId) return;
       try {
-        await AsyncStorage.setItem(itemsKeyForSession(sessionId), JSON.stringify(items));
+        await AsyncStorage.setItem(ITEMS_KEY, JSON.stringify(items));
       } catch {}
     })();
-  }, [itemsKeyForSession, items, sessionId]);
+  }, [ITEMS_KEY, items]);
 
-  // Persist active session id
-  useEffect(() => {
+  async function onSend() {
+    const message = text.trim();
+    if (!message || sending) return;
     if (!sessionId) return;
-    (async () => {
-      try {
-        await AsyncStorage.setItem(CHAT_SESSION_KEY, sessionId);
-      } catch {}
-    })();
-  }, [CHAT_SESSION_KEY, sessionId]);
 
-  const touchIssue = useCallback(
-    async (sid: string, previewText?: string) => {
-      const now = Date.now();
-      setIssues((prev) => {
-        const next = [...prev];
-        const idx = next.findIndex((x) => x.sessionId === sid);
-        const preview =
-          typeof previewText === "string" ? formatPreview(previewText) : idx >= 0 ? next[idx].preview : "";
-        const updated: Issue = { sessionId: sid, lastUpdatedAt: now, preview };
-
-        if (idx >= 0) next.splice(idx, 1);
-        next.unshift(updated);
-
-        persistIssues(next);
-        return next;
-      });
-    },
-    [persistIssues]
-  );
-
-  // Kept for future use (even though UI button is removed)
-  async function onStartNewConversation() {
-    if (sending) return;
-
-    try {
-      const newSid = await startNewSession();
-
-      setSessionId(newSid);
-      setItems([INITIAL_ASSISTANT]);
-      setShowEscalate(false);
-      setText("");
-
-      await touchIssue(newSid, "");
-      await AsyncStorage.setItem(CHAT_SESSION_KEY, newSid);
-
-      scrollToBottom(false);
-    } catch {
-      setItems((prev) => [
-        ...prev,
-        { role: "assistant", text: "Sorry — I couldn’t start a new conversation. Please try again." },
-      ]);
-    }
-  }
-
-  async function onSend(msg?: string) {
-    if (sending) return;
-
-    const message = (msg ?? text).trim();
-    if (!message) return;
-
-    setItems((prev) => [...prev, { role: "user", text: message }]);
     setText("");
     setSending(true);
 
-    Keyboard.dismiss();
-    scrollToBottom(true);
+    const sid = sessionId;
+
+    setItems((prev) => [...prev, { role: "user", text: message }]);
 
     try {
-      const sid = sessionId || (await getOrCreateSession({ forceNew: true }));
-      if (!sessionId) setSessionId(sid);
-
-      await touchIssue(sid, message);
-
       const res = await sendChat(sid, message, year);
 
-      const usedArticles = Array.isArray(res.used_articles)
-        ? res.used_articles.map((a: any) => ({ id: a.id, title: a.title }))
-        : [];
-
-      const cq = Array.isArray(res.clarifying_questions) ? res.clarifying_questions : [];
-      const clarifyingQuestion = cq?.[0] ? String(cq[0]) : "";
+      const usedArticles = res.used_articles || [];
+      const clarifyingQuestion = Array.isArray(res.clarifying_questions) && res.clarifying_questions.length > 0
+        ? res.clarifying_questions[0]
+        : "";
 
       setItems((prev) => [
         ...prev,
@@ -347,7 +180,6 @@ export default function Chat() {
       ]);
 
       setShowEscalate(!!res.show_escalation);
-      await touchIssue(sid);
     } catch {
       setItems((prev) => [
         ...prev,
@@ -373,8 +205,6 @@ export default function Chat() {
         <Pressable onPress={Keyboard.dismiss} style={StyleSheet.absoluteFill} pointerEvents="box-none">
           <View style={StyleSheet.absoluteFill} pointerEvents="none" />
         </Pressable>
-
-        {/* Removed: Header + Start New + Previous Issues UI */}
 
         <FlatList
           ref={listRef}

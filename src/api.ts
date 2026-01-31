@@ -44,22 +44,44 @@ async function http<T>(
   // Auto-attach auth header unless caller already set it
   const autoAuth = await getAuthHeaders();
 
-  const res = await fetch(url, {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      ...autoAuth,
-      ...(opts?.headers ?? {}),
-    },
-    body: opts?.body ? JSON.stringify(opts.body) : undefined,
-  });
+  const attempts = 3;
+  let lastErr: any;
 
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`HTTP ${res.status}: ${txt}`);
+  for (let i = 0; i < attempts; i++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000); // 15s
+
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          ...autoAuth,
+          ...(opts?.headers ?? {}),
+        },
+        body: opts?.body ? JSON.stringify(opts.body) : undefined,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`HTTP ${res.status}: ${txt}`);
+      }
+
+      return (await res.json()) as T;
+    } catch (e) {
+      clearTimeout(timeout);
+      lastErr = e;
+
+      // quick backoff: 300ms, 800ms, 1500ms
+      const delay = [300, 800, 1500][i] ?? 1500;
+      await new Promise((r) => setTimeout(r, delay));
+    }
   }
 
-  return (await res.json()) as T;
+  throw lastErr;
 }
 
 // ----------------------------
@@ -225,50 +247,39 @@ export async function createEscalation(payload: {
 }
 
 // ----------------------------
-// Live chat (customer)
+// Livechat
 // ----------------------------
-export type LiveChatSendResponse = {
-  ok: boolean;
-  conversation_id: string;
-};
-
-export type LiveChatHistoryResponse = {
-  conversation_id: string;
-  messages: {
-    id: string;
-    conversation_id: string;
-    sender_id: string;
-    sender_role: "customer" | "owner" | "system";
-    body: string;
-    created_at: string;
-  }[];
-};
-
-export async function liveChatSend(sessionId: string, body: string) {
-  return await http<LiveChatSendResponse>("/v1/livechat/send", {
-    body: { session_id: sessionId, body },
-  });
+export async function registerOwnerPushToken(token: string) {
+  return await http<{ ok: boolean }>("/v1/owner/push-token", { body: { token } });
 }
 
-export async function liveChatHistory(sessionId: string) {
-  return await http<LiveChatHistoryResponse>(`/v1/livechat/history/${sessionId}`);
+export async function sendLivechatMessage(payload: {
+  session_id: string;
+  message: string;
+  name?: string;
+  email?: string;
+  phone?: string;
+}) {
+  return await http<{ ok: boolean }>("/v1/livechat/send", { body: payload });
 }
 
-export async function registerOwnerPushToken(ownerId: string, expoPushToken: string) {
-  return await http<{ ok: boolean }>("/v1/owner/push-token", {
-    body: { owner_id: ownerId, expo_push_token: expoPushToken },
-  });
+export async function getLivechatHistory(sessionId: string) {
+  return await http<{ messages: { role: string; text: string; created_at: string }[] }>(
+    `/v1/livechat/history/${sessionId}`
+  );
 }
 
 // ----------------------------
 // Admin key helpers
 // ----------------------------
-export async function getSavedAdminKey() {
-  return (await AsyncStorage.getItem(ADMIN_KEY)) || "";
+export async function setAdminKey(key: string) {
+  const k = (key || "").trim();
+  if (!k) throw new Error("Admin key is empty");
+  await AsyncStorage.setItem(ADMIN_KEY, k);
 }
 
-export async function saveAdminKey(key: string) {
-  await AsyncStorage.setItem(ADMIN_KEY, key);
+export async function getAdminKey() {
+  return (await AsyncStorage.getItem(ADMIN_KEY)) || "";
 }
 
 export async function clearAdminKey() {
@@ -276,77 +287,70 @@ export async function clearAdminKey() {
 }
 
 // ----------------------------
-// Live chat (admin)
+// Admin livechat tools
 // ----------------------------
 export type AdminConversationItem = {
   conversation_id: string;
-  customer_id: string; // currently equals session_id in your schema
-  last_message?: {
-    sender_role: "customer" | "owner" | "system";
-    body: string;
-    created_at: string;
-  };
-};
-
-export type AdminConversationsResponse = {
-  conversations: AdminConversationItem[];
-};
-
-export async function adminLiveChatConversations(adminKey: string) {
-  return await http<AdminConversationsResponse>("/v1/admin/livechat/conversations", {
-    headers: { "X-Admin-Key": adminKey },
-  });
-}
-
-export async function adminLiveChatHistory(adminKey: string, conversationId: string) {
-  return await http<LiveChatHistoryResponse>(`/v1/admin/livechat/history/${conversationId}`, {
-    headers: { "X-Admin-Key": adminKey },
-  });
-}
-
-export async function adminLiveChatSend(adminKey: string, conversationId: string, body: string) {
-  return await http<{ ok: boolean; conversation_id: string }>("/v1/admin/livechat/send", {
-    headers: { "X-Admin-Key": adminKey },
-    body: { conversation_id: conversationId, body },
-  });
-}
-
-// ----------------------------
-// Admin: Quality control (all AI sessions) + deletes
-// ----------------------------
-export type AdminSessionItem = {
   session_id: string;
-  user_id?: string | null;
-  channel?: string | null;
-  mode?: string | null;
-  airstream_year?: number | null;
-  category?: string | null;
-  created_at?: string | null;
+  created_at: string;
   last_message_at?: string | null;
+  customer_id?: string | null;
   preview?: string | null;
 };
 
-export type AdminSessionsResponse = {
-  sessions: AdminSessionItem[];
+export async function adminListLivechatConversations(adminKey: string) {
+  return await http<{ conversations: AdminConversationItem[] }>("/v1/admin/livechat/conversations", {
+    headers: { "X-Admin-Key": adminKey },
+  });
+}
+
+export async function adminGetLivechatHistory(adminKey: string, conversationId: string) {
+  return await http<{ messages: { role: string; text: string; created_at: string }[] }>(
+    `/v1/admin/livechat/history/${conversationId}`,
+    { headers: { "X-Admin-Key": adminKey } }
+  );
+}
+
+export async function adminSendLivechatMessage(payload: {
+  admin_key: string;
+  conversation_id: string;
+  message: string;
+}) {
+  return await http<{ ok: boolean }>("/v1/admin/livechat/send", {
+    headers: { "X-Admin-Key": payload.admin_key },
+    body: { conversation_id: payload.conversation_id, message: payload.message },
+  });
+}
+
+// ----------------------------
+// Admin: QC sessions
+// ----------------------------
+export type AdminSessionItem = {
+  session_id: string;
+  created_at?: string;
+  updated_at?: string;
+  airstream_year?: number | null;
+  category?: string | null;
+  last_user_message?: string | null;
+  last_assistant_message?: string | null;
 };
 
 export async function adminListAllSessions(adminKey: string) {
-  return await http<AdminSessionsResponse>("/v1/admin/sessions", {
+  return await http<{ sessions: AdminSessionItem[] }>("/v1/admin/sessions", {
     headers: { "X-Admin-Key": adminKey },
   });
 }
 
 export async function adminDeleteSession(adminKey: string, sessionId: string) {
   return await http<{ ok: boolean }>(`/v1/admin/sessions/${sessionId}`, {
-    headers: { "X-Admin-Key": adminKey },
     method: "DELETE",
+    headers: { "X-Admin-Key": adminKey },
   });
 }
 
 export async function adminDeleteLiveChatConversation(adminKey: string, conversationId: string) {
   return await http<{ ok: boolean }>(`/v1/admin/livechat/conversations/${conversationId}`, {
-    headers: { "X-Admin-Key": adminKey },
     method: "DELETE",
+    headers: { "X-Admin-Key": adminKey },
   });
 }
-

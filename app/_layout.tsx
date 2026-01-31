@@ -1,7 +1,7 @@
-import { Stack } from "expo-router";
+import { Stack, router } from "expo-router";
 import "react-native-url-polyfill/auto";
 import "react-native-get-random-values";
-import { Image, View, Text, StyleSheet } from "react-native";
+import { Image, View, Text, StyleSheet, Pressable } from "react-native";
 
 const BRAND = {
   bg: "#071018",
@@ -44,7 +44,25 @@ export default function Layout() {
       <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="year" options={{ headerTitle: () => <HeaderBrand /> }} />
       <Stack.Screen name="category" options={{ headerTitle: () => <HeaderBrand /> }} />
-      <Stack.Screen name="chat" options={{ headerTitle: () => <HeaderBrand /> }} />
+
+      {/* ✅ Chat back arrow goes HOME */}
+      <Stack.Screen
+        name="chat"
+        options={{
+          headerTitle: () => <HeaderBrand />,
+          headerBackVisible: false,
+          headerLeft: () => (
+            <Pressable
+              onPress={() => router.replace("/")}
+              hitSlop={12}
+              style={{ paddingHorizontal: 12, paddingVertical: 8 }}
+            >
+              <Text style={{ color: "#FFFFFF", fontWeight: "900", fontSize: 16 }}>‹ Home</Text>
+            </Pressable>
+          ),
+        }}
+      />
+
       <Stack.Screen name="live-chat" options={{ headerTitle: () => <HeaderBrand /> }} />
       <Stack.Screen name="escalate" options={{ headerTitle: () => <HeaderBrand /> }} />
       <Stack.Screen name="success" options={{ headerTitle: () => <HeaderBrand /> }} />

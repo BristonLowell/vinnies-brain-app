@@ -1,24 +1,49 @@
 import { useRouter, useLocalSearchParams } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
-import { View, Text, Pressable, StyleSheet, ScrollView, StatusBar, Alert } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  View,
+  Text,
+  Pressable,
+  StyleSheet,
+  StatusBar,
+  Alert,
+  FlatList,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { getOrCreateSession, setContext } from "../src/api";
+
+const ITEM_H = 44;
+const VISIBLE_ITEMS = 7; // odd number looks best
+const LIST_H = ITEM_H * VISIBLE_ITEMS;
 
 export default function Year() {
   const router = useRouter();
   const params = useLocalSearchParams<{ new?: string }>();
-
-  // Home always sends new=1, so default behavior is "fresh"
   const startFresh = params?.new === "1";
 
   const years = useMemo(() => Array.from({ length: 2026 - 2000 + 1 }, (_, i) => 2000 + i), []);
-  const [selected, setSelected] = useState<number | null>(null);
+  const defaultYear = 2018;
+  const defaultIndex = Math.max(0, years.indexOf(defaultYear));
+
+  const [selected, setSelected] = useState<number>(years[defaultIndex]);
   const [loading, setLoading] = useState(false);
 
+  const listRef = useRef<FlatList<number>>(null);
+
   useEffect(() => {
-    // warm up session; don't block UI
-    getOrCreateSession().catch(() => {});
-  }, []);
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToOffset({ offset: defaultIndex * ITEM_H, animated: false });
+    });
+  }, [defaultIndex]);
+
+  function onScrollEnd(e: NativeSyntheticEvent<NativeScrollEvent>) {
+    const y = e.nativeEvent.contentOffset.y;
+    const idx = Math.round(y / ITEM_H);
+    const clamped = Math.max(0, Math.min(years.length - 1, idx));
+    setSelected(years[clamped]);
+  }
 
   async function next() {
     if (!selected || loading) return;
@@ -27,15 +52,17 @@ export default function Year() {
 
     let sid = "";
     try {
-      // ✅ key fix: rotate session if coming from Start Troubleshooting
+      // ✅ Start Troubleshooting must create a brand-new session
       sid = await getOrCreateSession({ forceNew: startFresh });
     } catch (e) {
       console.log("getOrCreateSession failed:", e);
+      // still navigate; chat can create session again
     }
 
+    // IMPORTANT: never block navigation on setContext
     if (sid) {
       try {
-        // ✅ correct signature
+        await new Promise((res) => setTimeout(res, 50));
         await setContext(sid, { airstream_year: selected });
       } catch (e) {
         console.log("setContext failed (non-fatal):", e);
@@ -44,8 +71,9 @@ export default function Year() {
 
     try {
       router.push({ pathname: "/chat", params: { year: String(selected) } });
-    } catch {
-      Alert.alert("Navigation failed", "Could not open chat screen.");
+    } catch (e) {
+      console.log("router.push failed:", e);
+      Alert.alert("Navigation failed", "Could not open chat screen. Check that app/chat.tsx exists.");
     } finally {
       setLoading(false);
     }
@@ -58,27 +86,34 @@ export default function Year() {
       <View style={styles.container}>
         <View style={styles.header}>
           <Text style={styles.title}>What year is your Airstream?</Text>
-          <Text style={styles.subtitle}>Select the model year so troubleshooting steps are accurate.</Text>
+          <Text style={styles.subtitle}>Scroll to select the model year so troubleshooting steps are accurate.</Text>
         </View>
 
-        <ScrollView contentContainerStyle={styles.grid} showsVerticalScrollIndicator={false}>
-          {years.map((y) => {
-            const isSelected = selected === y;
-            return (
-              <Pressable
-                key={y}
-                onPress={() => setSelected(y)}
-                style={({ pressed }) => [
-                  styles.chip,
-                  isSelected && styles.chipSelected,
-                  pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] },
-                ]}
-              >
-                <Text style={[styles.chipText, isSelected && styles.chipTextSelected]}>{y}</Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
+        <View style={styles.wheelWrap}>
+          <View style={styles.centerMarker} pointerEvents="none" />
+
+          <FlatList
+            ref={listRef}
+            data={years}
+            keyExtractor={(x) => String(x)}
+            showsVerticalScrollIndicator={false}
+            snapToInterval={ITEM_H}
+            decelerationRate="fast"
+            onMomentumScrollEnd={onScrollEnd}
+            onScrollEndDrag={onScrollEnd}
+            getItemLayout={(_, index) => ({ length: ITEM_H, offset: ITEM_H * index, index })}
+            contentContainerStyle={{ paddingVertical: (LIST_H - ITEM_H) / 2 }}
+            style={{ height: LIST_H }}
+            renderItem={({ item }) => {
+              const isSelected = item === selected;
+              return (
+                <View style={styles.row}>
+                  <Text style={[styles.yearText, isSelected && styles.yearTextSelected]}>{item}</Text>
+                </View>
+              );
+            }}
+          />
+        </View>
 
         <Pressable
           onPress={next}
@@ -104,22 +139,39 @@ const styles = StyleSheet.create({
   title: { color: "white", fontSize: 22, fontWeight: "900" },
   subtitle: { marginTop: 4, color: "rgba(255,255,255,0.6)", fontSize: 13 },
 
-  grid: { flexDirection: "row", flexWrap: "wrap", gap: 10, paddingBottom: 20 },
-
-  chip: {
-    width: "30%",
-    paddingVertical: 14,
-    borderRadius: 16,
-    backgroundColor: "rgba(255,255,255,0.06)",
+  wheelWrap: {
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.10)",
-    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    overflow: "hidden",
+    marginTop: 8,
+    marginBottom: 18,
   },
-  chipSelected: { backgroundColor: "#2563EB", borderColor: "rgba(255,255,255,0.15)" },
-  chipText: { color: "rgba(255,255,255,0.9)", fontSize: 14, fontWeight: "800" },
-  chipTextSelected: { color: "white" },
 
-  button: { height: 52, borderRadius: 16, backgroundColor: "white", alignItems: "center", justifyContent: "center" },
+  row: { height: ITEM_H, alignItems: "center", justifyContent: "center" },
+  yearText: { color: "rgba(255,255,255,0.60)", fontSize: 18, fontWeight: "800" },
+  yearTextSelected: { color: "white", fontSize: 22, fontWeight: "900" },
+
+  centerMarker: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: (LIST_H - ITEM_H) / 2,
+    height: ITEM_H,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: "rgba(241,238,219,0.22)",
+    backgroundColor: "rgba(4,53,83,0.18)",
+  },
+
+  button: {
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: "white",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   buttonDisabled: { opacity: 0.35 },
   buttonText: { color: "#0B0F14", fontSize: 15, fontWeight: "900" },
 });

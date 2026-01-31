@@ -15,7 +15,7 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { getOrCreateSession, sendChat } from "../src/api";
+import { getOrCreateSession, sendChat, getSupportStatus } from "../src/api";
 
 const BRAND = {
   bg: "#071018",
@@ -51,6 +51,13 @@ function initials(label: string) {
   return parts.map((p) => p[0]?.toUpperCase()).join("");
 }
 
+function fmtLocal(ts?: string) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString();
+}
+
 export default function Chat() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -66,6 +73,10 @@ export default function Chat() {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [showEscalate, setShowEscalate] = useState(false);
+
+  // ✅ Support status (business-hours gating for Live Chat CTA)
+  const [businessHours, setBusinessHours] = useState<boolean | null>(null);
+  const [nextOpen, setNextOpen] = useState<string>("");
 
   const listRef = useRef<FlatList<ChatItem>>(null);
   const inputRef = useRef<TextInput>(null);
@@ -88,6 +99,28 @@ export default function Chat() {
   useEffect(() => {
     scrollToBottom(true);
   }, [items.length, scrollToBottom]);
+
+  // ✅ Load support status (server-side PT hours)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const s: any = await getSupportStatus();
+        if (cancelled) return;
+        setBusinessHours(!!s?.business_hours);
+        setNextOpen(s?.next_open ? String(s.next_open) : "");
+      } catch {
+        // If status fails, don't incorrectly show live chat after hours.
+        // We keep it null and default to email CTA when escalating.
+        if (cancelled) return;
+        setBusinessHours(null);
+        setNextOpen("");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Load the session and restore chat items for that session if present.
   useEffect(() => {
@@ -139,9 +172,7 @@ export default function Chat() {
   }, [ITEMS_KEY, items]);
 
   const progress = useMemo(() => {
-    const last = [...items]
-      .reverse()
-      .find((x) => x.role === "assistant" && x.meta?.clarifyingQuestion?.trim());
+    const last = [...items].reverse().find((x) => x.role === "assistant" && x.meta?.clarifyingQuestion?.trim());
     const q = last?.meta?.clarifyingQuestion?.trim();
     if (!q) return null;
     return q;
@@ -159,9 +190,7 @@ export default function Chat() {
 
     const usedArticles = res.used_articles || [];
     const clarifyingQuestion =
-      Array.isArray(res.clarifying_questions) && res.clarifying_questions.length > 0
-        ? res.clarifying_questions[0]
-        : "";
+      Array.isArray(res.clarifying_questions) && res.clarifying_questions.length > 0 ? res.clarifying_questions[0] : "";
 
     setItems((prev) => [
       ...prev,
@@ -201,6 +230,10 @@ export default function Chat() {
       scrollToBottom(true);
     }
   }
+
+  // ✅ Determine which escalation CTA to show
+  const showLiveChatCTA = showEscalate && businessHours === true;
+  const showEmailCTA = showEscalate && businessHours !== true; // after hours OR unknown => email path
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
@@ -262,13 +295,34 @@ export default function Chat() {
           }
         />
 
-        {showEscalate && (
+        {/* ✅ Business-hours gated CTA */}
+        {showLiveChatCTA && (
           <Pressable
             style={({ pressed }) => [styles.escalate, pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] }]}
             onPress={() => router.push({ pathname: "/live-chat" })}
           >
             <Text style={styles.escalateText}>Chat with Vinnies now</Text>
             <Text style={styles.escalateSub}>You are chatting with Vinnies</Text>
+          </Pressable>
+        )}
+
+        {/* ✅ After-hours (or unknown) CTA */}
+        {showEmailCTA && (
+          <Pressable
+            style={({ pressed }) => [styles.escalate, pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] }]}
+            onPress={() =>
+              router.push({
+                pathname: "/escalate",
+                params: year ? { year: String(year) } : undefined,
+              })
+            }
+          >
+            <Text style={styles.escalateText}>Email Vinnies</Text>
+            <Text style={styles.escalateSub}>
+              {businessHours === false
+                ? `After hours — we’ll pre-fill an email for you.${nextOpen ? ` Next open: ${fmtLocal(nextOpen)}` : ""}`
+                : "We’ll pre-fill an email with your troubleshooting history."}
+            </Text>
           </Pressable>
         )}
 

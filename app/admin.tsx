@@ -680,9 +680,15 @@ export default function Admin() {
               </Text>
             </View>
 
-            <Pressable style={[styles.smallBtn]} onPress={() => router.back()}>
-              <Text style={styles.smallBtnText}>Back</Text>
-            </Pressable>
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <Pressable style={[styles.smallBtn]} onPress={() => router.push({ pathname: "/admin-inbox" })}>
+                <Text style={styles.smallBtnText}>Inbox</Text>
+              </Pressable>
+
+              <Pressable style={[styles.smallBtn]} onPress={() => router.back()}>
+                <Text style={styles.smallBtnText}>Back</Text>
+              </Pressable>
+            </View>
           </View>
 
           {/* Basics */}

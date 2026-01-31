@@ -33,6 +33,15 @@ import { API_BASE_URL } from "../src/config";
 // ✅ OPTION A: put your Supabase user UUID here (same value as Render env OWNER_SUPABASE_USER_ID)
 const OWNER_ID = "PASTE_YOUR_SUPABASE_USER_UUID_HERE";
 
+const BRAND = {
+  bg: "#0B0F14",
+  surface: "rgba(255,255,255,0.06)",
+  border: "rgba(255,255,255,0.10)",
+  cream: "#F1EEDB",
+  text: "rgba(255,255,255,0.92)",
+  muted: "rgba(255,255,255,0.65)",
+};
+
 function fmt(ts?: string) {
   if (!ts) return "";
   const d = new Date(ts);
@@ -87,6 +96,19 @@ async function registerForPushAndSendToBackend(ownerId: string) {
 
 type Tab = "live" | "ai";
 
+function SkeletonRow() {
+  return (
+    <View style={styles.skelRow}>
+      <View style={{ flex: 1, gap: 10 }}>
+        <View style={[styles.skelLine, { width: "52%" }]} />
+        <View style={[styles.skelLine, { width: "88%" }]} />
+        <View style={[styles.skelLine, { width: "36%" }]} />
+      </View>
+      <View style={[styles.skelPill]} />
+    </View>
+  );
+}
+
 export default function AdminInbox() {
   const router = useRouter();
 
@@ -101,6 +123,8 @@ export default function AdminInbox() {
 
   const [liveItems, setLiveItems] = useState<AdminConversationItem[]>([]);
   const [aiItems, setAiItems] = useState<AdminSessionItem[]>([]);
+
+  const [query, setQuery] = useState("");
 
   const mounted = useRef(true);
   const pushRegisteredRef = useRef(false);
@@ -232,6 +256,38 @@ export default function AdminInbox() {
     );
   }
 
+  const filteredLive = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return liveItems;
+    return liveItems.filter((x) => {
+      const last = x.last_message?.body || "";
+      const cid = x.conversation_id || "";
+      const cust = x.customer_id || "";
+      return (
+        cid.toLowerCase().includes(q) ||
+        cust.toLowerCase().includes(q) ||
+        last.toLowerCase().includes(q)
+      );
+    });
+  }, [liveItems, query]);
+
+  const filteredAi = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return aiItems;
+    return aiItems.filter((x) => {
+      const sid = x.session_id || "";
+      const prev = x.preview || "";
+      const yr = typeof x.airstream_year === "number" ? String(x.airstream_year) : "";
+      const cat = x.category ? String(x.category) : "";
+      return (
+        sid.toLowerCase().includes(q) ||
+        prev.toLowerCase().includes(q) ||
+        yr.toLowerCase().includes(q) ||
+        cat.toLowerCase().includes(q)
+      );
+    });
+  }, [aiItems, query]);
+
   const LiveRow = ({ item }: { item: AdminConversationItem }) => {
     const last = item.last_message;
     return (
@@ -314,6 +370,8 @@ export default function AdminInbox() {
     );
   };
 
+  const showList = hasKey && !loading;
+
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <View style={styles.header}>
@@ -377,42 +435,67 @@ export default function AdminInbox() {
             </View>
           </View>
 
+          <View style={styles.searchWrap}>
+            <TextInput
+              value={query}
+              onChangeText={setQuery}
+              placeholder={tab === "live" ? "Search live chats…" : "Search AI sessions…"}
+              placeholderTextColor="rgba(255,255,255,0.35)"
+              style={styles.search}
+              autoCapitalize="none"
+            />
+          </View>
+
           {!!error && (
             <View style={styles.errorBox}>
-              <Text style={styles.errorText}>{error}</Text>
+              <Text style={styles.errorText} numberOfLines={2}>{error}</Text>
+              <Pressable onPress={() => load(true)} style={({ pressed }) => [styles.retryBtn, pressed && { opacity: 0.9 }]}>
+                <Text style={styles.retryBtnText}>Retry</Text>
+              </Pressable>
             </View>
           )}
 
           {loading ? (
-            <View style={styles.loading}>
-              <ActivityIndicator />
-              <Text style={styles.loadingText}>Loading…</Text>
+            <View style={{ paddingHorizontal: 16, paddingTop: 10, gap: 10 }}>
+              <SkeletonRow />
+              <SkeletonRow />
+              <SkeletonRow />
+              <SkeletonRow />
+              <SkeletonRow />
             </View>
           ) : tab === "live" ? (
             <FlatList
-              data={liveItems}
+              data={filteredLive}
               keyExtractor={(x) => x.conversation_id}
               contentContainerStyle={styles.list}
               renderItem={({ item }) => <LiveRow item={item} />}
               refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} />}
               ListEmptyComponent={
                 <View style={styles.empty}>
-                  <Text style={styles.emptyTitle}>No conversations yet</Text>
-                  <Text style={styles.emptySub}>When customers message you, they’ll show up here.</Text>
+                  <Text style={styles.emptyTitle}>{query.trim() ? "No matches" : "No conversations yet"}</Text>
+                  <Text style={styles.emptySub}>
+                    {query.trim()
+                      ? "Try a different search."
+                      : "When customers message you, they’ll show up here."}
+                  </Text>
                 </View>
               }
             />
           ) : (
             <FlatList
-              data={aiItems}
+              data={filteredAi}
               keyExtractor={(x) => x.session_id}
               contentContainerStyle={styles.list}
               renderItem={({ item }) => <AiRow item={item} />}
               refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} />}
               ListEmptyComponent={
                 <View style={styles.empty}>
-                  <Text style={styles.emptyTitle}>No sessions found</Text>
-                  <Text style={styles.emptySub}>This list shows all troubleshooting chats for QC.</Text>
+                  <Text style={styles.emptyTitle}>{query.trim() ? "No matches" : "No sessions found"}</Text>
+                  <Text style={styles.emptySub}>
+                    {query.trim()
+                      ? "Try a different search."
+                      : "This list shows all troubleshooting chats for QC."}
+                  </Text>
                 </View>
               }
             />
@@ -424,19 +507,19 @@ export default function AdminInbox() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#0B0F14" },
+  safe: { flex: 1, backgroundColor: BRAND.bg },
 
   header: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 6 },
   title: { color: "white", fontSize: 20, fontWeight: "900" },
-  sub: { color: "rgba(255,255,255,0.65)", marginTop: 4 },
+  sub: { color: BRAND.muted, marginTop: 4 },
 
   card: {
     margin: 16,
     padding: 14,
     borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: BRAND.surface,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
+    borderColor: BRAND.border,
     gap: 10,
   },
   cardTitle: { color: "white", fontSize: 15, fontWeight: "900" },
@@ -448,7 +531,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     backgroundColor: "rgba(255,255,255,0.07)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
+    borderColor: BRAND.border,
     color: "white",
   },
 
@@ -460,7 +543,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   btnDisabled: { opacity: 0.45 },
-  btnText: { color: "#0B0F14", fontWeight: "900" },
+  btnText: { color: BRAND.bg, fontWeight: "900" },
 
   error: { color: "rgba(239,68,68,0.95)", fontWeight: "800" },
 
@@ -468,9 +551,9 @@ const styles = StyleSheet.create({
 
   tabs: {
     flexDirection: "row",
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: BRAND.surface,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
+    borderColor: BRAND.border,
     borderRadius: 16,
     padding: 4,
   },
@@ -485,11 +568,22 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: "rgba(255,255,255,0.08)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
+    borderColor: BRAND.border,
     alignItems: "center",
     justifyContent: "center",
   },
   toolbarText: { color: "white", fontWeight: "900" },
+
+  searchWrap: { paddingHorizontal: 16, paddingBottom: 10 },
+  search: {
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    backgroundColor: "rgba(255,255,255,0.07)",
+    borderWidth: 1,
+    borderColor: BRAND.border,
+    color: "white",
+  },
 
   errorBox: {
     marginHorizontal: 16,
@@ -499,11 +593,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(239,68,68,0.35)",
     backgroundColor: "rgba(239,68,68,0.12)",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
   },
-  errorText: { color: "white", fontWeight: "900" },
-
-  loading: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10 },
-  loadingText: { color: "rgba(255,255,255,0.75)", fontWeight: "800" },
+  errorText: { color: "white", fontWeight: "900", flex: 1 },
+  retryBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: BRAND.cream,
+  },
+  retryBtnText: { color: BRAND.bg, fontWeight: "900", fontSize: 12 },
 
   list: { paddingHorizontal: 16, paddingBottom: 20 },
 
@@ -511,9 +612,9 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     paddingHorizontal: 14,
     borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: BRAND.surface,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
+    borderColor: BRAND.border,
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
@@ -540,4 +641,29 @@ const styles = StyleSheet.create({
   empty: { padding: 24, alignItems: "center", gap: 8 },
   emptyTitle: { color: "white", fontWeight: "900", fontSize: 16 },
   emptySub: { color: "rgba(255,255,255,0.65)", textAlign: "center" },
+
+  skelRow: {
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    borderRadius: 18,
+    backgroundColor: BRAND.surface,
+    borderWidth: 1,
+    borderColor: BRAND.border,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  skelLine: {
+    height: 10,
+    borderRadius: 8,
+    backgroundColor: "rgba(255,255,255,0.12)",
+  },
+  skelPill: {
+    width: 62,
+    height: 28,
+    borderRadius: 10,
+    backgroundColor: "rgba(255,255,255,0.10)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+  },
 });

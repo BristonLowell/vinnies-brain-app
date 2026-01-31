@@ -994,7 +994,12 @@ export default function Admin() {
             <Pressable style={styles.smallBtn} onPress={() => router.push("/admin-inbox")}>
               <Text style={styles.smallBtnText}>Live Chat Inbox</Text>
             </Pressable>
+
+            <Pressable style={styles.smallBtn} onPress={() => router.push("/admin-session")}>
+              <Text style={styles.smallBtnText}>All AI Conversations</Text>
+            </Pressable>
           </View>
+
         </View>
 
         {/* Admin Key */}

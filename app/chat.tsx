@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
   Keyboard,
   StatusBar,
+  Share,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -43,17 +44,6 @@ const INITIAL_ASSISTANT: ChatItem = {
 };
 
 const INPUT_BAR_EST_HEIGHT = 76;
-const NOT_FROM_VINNIES_PREFIX = "⚠️ This information is NOT from Vinnies";
-
-function parseNonVinniesBanner(text: string): { hasBanner: boolean; body: string } {
-  const raw = (text ?? "").trimStart();
-  if (!raw.startsWith(NOT_FROM_VINNIES_PREFIX)) return { hasBanner: false, body: text };
-
-  const lines = raw.split("\n");
-  lines.shift();
-  while (lines.length > 0 && lines[0].trim() === "") lines.shift();
-  return { hasBanner: true, body: lines.join("\n") };
-}
 
 function initials(label: string) {
   const s = (label || "").trim();
@@ -78,10 +68,17 @@ export default function Chat() {
   const [sending, setSending] = useState(false);
   const [showEscalate, setShowEscalate] = useState(false);
 
+  // Premium state handling
+  const [lastFailedUserMessage, setLastFailedUserMessage] = useState<string | null>(null);
+  const [connectionProblem, setConnectionProblem] = useState(false);
+
   const listRef = useRef<FlatList<ChatItem>>(null);
   const inputRef = useRef<TextInput>(null);
 
-  const ITEMS_KEY = useMemo(() => (sessionId ? `vinniesbrain_chat_items_${sessionId}` : ""), [sessionId]);
+  const ITEMS_KEY = useMemo(
+    () => (sessionId ? `vinniesbrain_chat_items_${sessionId}` : ""),
+    [sessionId]
+  );
 
   useEffect(() => {
     const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardOpen(true));
@@ -100,8 +97,7 @@ export default function Chat() {
     scrollToBottom(true);
   }, [items.length, scrollToBottom]);
 
-  // Load the session that was created on the Year page (SESSION_KEY),
-  // and load chat items for that session if present.
+  // Load / restore session + messages
   useEffect(() => {
     let cancelled = false;
 
@@ -150,6 +146,59 @@ export default function Chat() {
     })();
   }, [ITEMS_KEY, items]);
 
+  const progress = useMemo(() => {
+    const last = [...items]
+      .reverse()
+      .find((x) => x.role === "assistant" && x.meta?.clarifyingQuestion?.trim());
+    const q = last?.meta?.clarifyingQuestion?.trim();
+    if (!q) return null;
+    return q;
+  }, [items]);
+
+  async function onShare() {
+    const lastAi = [...items].reverse().find((x) => x.role === "assistant")?.text ?? "";
+    const lastUser = [...items].reverse().find((x) => x.role === "user")?.text ?? "";
+
+    const summary = [
+      "Vinnies Brain – Troubleshooting Summary",
+      year ? `Year: ${year}` : "Year: (not set)",
+      "",
+      "Latest user message:",
+      lastUser || "(none)",
+      "",
+      "Latest assistant response:",
+      (lastAi || "(none)").slice(0, 1200),
+    ].join("\n");
+
+    try {
+      await Share.share({ message: summary });
+    } catch {}
+  }
+
+  async function sendAndAppend(message: string) {
+    const sid = sessionId;
+    if (!sid) return;
+
+    const res = await sendChat(sid, message, year);
+
+    const usedArticles = res.used_articles || [];
+    const clarifyingQuestion =
+      Array.isArray(res.clarifying_questions) && res.clarifying_questions.length > 0
+        ? res.clarifying_questions[0]
+        : "";
+
+    setItems((prev) => [
+      ...prev,
+      {
+        role: "assistant",
+        text: res.answer,
+        meta: { usedArticles, showEscalation: !!res.show_escalation, clarifyingQuestion },
+      },
+    ]);
+
+    setShowEscalate(!!res.show_escalation);
+  }
+
   async function onSend() {
     const message = text.trim();
     if (!message || sending) return;
@@ -157,33 +206,23 @@ export default function Chat() {
 
     setText("");
     setSending(true);
-
-    const sid = sessionId;
+    setConnectionProblem(false);
+    setLastFailedUserMessage(null);
 
     setItems((prev) => [...prev, { role: "user", text: message }]);
 
     try {
-      const res = await sendChat(sid, message, year);
-
-      const usedArticles = res.used_articles || [];
-      const clarifyingQuestion = Array.isArray(res.clarifying_questions) && res.clarifying_questions.length > 0
-        ? res.clarifying_questions[0]
-        : "";
+      await sendAndAppend(message);
+    } catch {
+      setConnectionProblem(true);
+      setLastFailedUserMessage(message);
 
       setItems((prev) => [
         ...prev,
         {
           role: "assistant",
-          text: res.answer,
-          meta: { usedArticles, showEscalation: !!res.show_escalation, clarifyingQuestion },
+          text: "I couldn’t reach the server. Tap Retry below, or wait a moment and try again.",
         },
-      ]);
-
-      setShowEscalate(!!res.show_escalation);
-    } catch {
-      setItems((prev) => [
-        ...prev,
-        { role: "assistant", text: "Sorry — I couldn’t reach the server. Please try again." },
       ]);
     } finally {
       setSending(false);
@@ -206,6 +245,31 @@ export default function Chat() {
           <View style={StyleSheet.absoluteFill} pointerEvents="none" />
         </Pressable>
 
+        <View style={styles.topBar}>
+          <View style={{ gap: 2 }}>
+            <Text style={styles.topTitle}>Troubleshooting</Text>
+            <Text style={styles.topSub}>Chat with Vinnies Brain</Text>
+          </View>
+
+          <View style={{ flexDirection: "row", gap: 10 }}>
+            <Pressable
+              onPress={onShare}
+              style={({ pressed }) => [styles.topBtn, pressed && { opacity: 0.85 }]}
+              hitSlop={10}
+            >
+              <Text style={styles.topBtnText}>Share</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        {progress ? (
+          <View style={styles.progressChip}>
+            <Text style={styles.progressText} numberOfLines={2}>
+              You’re here: {progress}
+            </Text>
+          </View>
+        ) : null}
+
         <FlatList
           ref={listRef}
           data={items}
@@ -221,7 +285,6 @@ export default function Chat() {
           renderItem={({ item }) => {
             const isUser = item.role === "user";
             const cq = item.meta?.clarifyingQuestion?.trim();
-            const parsed = !isUser ? parseNonVinniesBanner(item.text) : { hasBanner: false, body: item.text };
 
             return (
               <View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
@@ -232,17 +295,8 @@ export default function Chat() {
                 )}
 
                 <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
-                  {!isUser && parsed.hasBanner && (
-                    <View style={styles.notFromVinniesBanner}>
-                      <Text style={styles.notFromVinniesText}>
-                        ⚠️ This information is NOT from Vinnies Brain’s database.
-                      </Text>
-                    </View>
-                  )}
-
                   {!isUser && !!cq && <Text style={styles.clarifyingQuestion}>{cq}</Text>}
-
-                  <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>{parsed.body}</Text>
+                  <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>{item.text}</Text>
                 </View>
               </View>
             );
@@ -261,6 +315,35 @@ export default function Chat() {
             ) : null
           }
         />
+
+        {connectionProblem && lastFailedUserMessage ? (
+          <View style={styles.retryBanner}>
+            <Text style={styles.retryText} numberOfLines={2}>
+              Connection issue. Your last message didn’t send.
+            </Text>
+
+            <Pressable
+              onPress={async () => {
+                const msg = lastFailedUserMessage;
+                setConnectionProblem(false);
+                setLastFailedUserMessage(null);
+                setSending(true);
+                try {
+                  await sendAndAppend(msg);
+                } catch {
+                  setConnectionProblem(true);
+                  setLastFailedUserMessage(msg);
+                } finally {
+                  setSending(false);
+                  scrollToBottom(true);
+                }
+              }}
+              style={({ pressed }) => [styles.retryBtn, pressed && { opacity: 0.9 }]}
+            >
+              <Text style={styles.retryBtnText}>Retry</Text>
+            </Pressable>
+          </View>
+        ) : null}
 
         {showEscalate && (
           <Pressable
@@ -315,6 +398,42 @@ export default function Chat() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: BRAND.bg },
 
+  topBar: {
+    paddingHorizontal: 14,
+    paddingTop: 8,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: BRAND.border,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: BRAND.bg,
+  },
+  topTitle: { color: BRAND.cream, fontWeight: "900", fontSize: 16 },
+  topSub: { color: BRAND.muted, fontWeight: "700", fontSize: 12 },
+
+  topBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: BRAND.border,
+    backgroundColor: BRAND.surface,
+  },
+  topBtnText: { color: BRAND.text, fontWeight: "800", fontSize: 13 },
+
+  progressChip: {
+    marginHorizontal: 14,
+    marginTop: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: BRAND.border,
+    backgroundColor: "rgba(4,53,83,0.18)",
+  },
+  progressText: { color: BRAND.text, fontSize: 12, fontWeight: "700" },
+
   listContent: { paddingHorizontal: 14, paddingTop: 14, paddingBottom: 10, gap: 10, flexGrow: 1 },
 
   row: { flexDirection: "row", alignItems: "flex-end", gap: 10 },
@@ -337,17 +456,6 @@ const styles = StyleSheet.create({
   aiBubble: { backgroundColor: "rgba(255,255,255,0.05)", borderColor: BRAND.border },
   userBubble: { backgroundColor: BRAND.navy, borderColor: "rgba(241,238,219,0.18)" },
 
-  notFromVinniesBanner: {
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderRadius: 12,
-    marginBottom: 10,
-    backgroundColor: "rgba(241,238,219,0.10)",
-    borderWidth: 1,
-    borderColor: "rgba(241,238,219,0.18)",
-  },
-  notFromVinniesText: { color: BRAND.cream, fontSize: 12, lineHeight: 16, fontWeight: "900" },
-
   clarifyingQuestion: { fontSize: 15, lineHeight: 20, fontWeight: "900", color: BRAND.cream, marginBottom: 8 },
 
   bubbleText: { fontSize: 15, lineHeight: 20 },
@@ -356,6 +464,28 @@ const styles = StyleSheet.create({
 
   typingBubble: { flexDirection: "row", alignItems: "center", gap: 8 },
   typingText: { color: BRAND.muted, fontWeight: "800" },
+
+  retryBanner: {
+    marginHorizontal: 14,
+    marginBottom: 10,
+    padding: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(241,238,219,0.18)",
+    backgroundColor: "rgba(241,238,219,0.08)",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  retryText: { color: BRAND.cream, fontWeight: "800", fontSize: 12, flex: 1 },
+  retryBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: BRAND.cream,
+  },
+  retryBtnText: { color: BRAND.navy, fontWeight: "900", fontSize: 12 },
 
   escalate: {
     marginHorizontal: 14,

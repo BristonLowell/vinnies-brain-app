@@ -36,7 +36,6 @@ export default function Layout() {
         headerShadowVisible: false,
         contentStyle: { backgroundColor: BRAND.bg },
 
-        // ✅ Native-stack safe replacements for headerBackTitleVisible:
         headerBackTitle: "",
         headerBackButtonMenuEnabled: false,
       }}
@@ -45,7 +44,7 @@ export default function Layout() {
       <Stack.Screen name="year" options={{ headerTitle: () => <HeaderBrand /> }} />
       <Stack.Screen name="category" options={{ headerTitle: () => <HeaderBrand /> }} />
 
-      {/* ✅ Chat back arrow goes HOME */}
+      {/* ✅ Chat back goes Home */}
       <Stack.Screen
         name="chat"
         options={{
@@ -71,9 +70,11 @@ export default function Layout() {
       <Stack.Screen name="admin" options={{ headerTitle: () => <HeaderBrand /> }} />
       <Stack.Screen name="admin-inbox" options={{ headerTitle: () => <HeaderBrand /> }} />
       <Stack.Screen name="admin-chat" options={{ headerTitle: () => <HeaderBrand /> }} />
-      <Stack.Screen name="admin-session" options={{ headerTitle: () => <HeaderBrand /> }} />
-      <Stack.Screen name="inbox" options={{ headerTitle: () => <HeaderBrand /> }} />
 
+      {/* ✅ This was missing */}
+      <Stack.Screen name="admin-session" options={{ headerTitle: () => <HeaderBrand /> }} />
+
+      <Stack.Screen name="inbox" options={{ headerTitle: () => <HeaderBrand /> }} />
       <Stack.Screen name="modal" options={{ presentation: "modal", title: "Modal" }} />
     </Stack>
   );

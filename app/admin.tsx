@@ -10,17 +10,37 @@ import {
   Platform,
   Modal,
   TouchableOpacity,
+  KeyboardAvoidingView,
+  Keyboard,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { API_BASE_URL } from "../src/config";
+import { getSavedAdminKey } from "../src/api";
 
-const ADMIN_KEY_STORAGE = "vinnies_admin_key";
+/**
+ * decision_tree shape expected by backend:
+ * {
+ *   version: 1,
+ *   start: "<nodeId>",
+ *   nodes: {
+ *     "<nodeId>": { title, body, options: [{text:"YES", goto:"<nodeId2>"},{text:"NO", goto:"end_not_applicable"}] }
+ *   }
+ * }
+ */
 
-// ✅ New draft key (v2). We'll still try to restore the old v1 too.
-const ADMIN_DRAFT_STORAGE_V2 = "vinnies_admin_article_draft_v2";
-const ADMIN_DRAFT_STORAGE_V1 = "vinnies_admin_article_draft_v1";
+type DTOption = { text: string; goto: string };
+type DTNode = { id: string; title: string; body: string; options: DTOption[] };
+type DecisionTreeV1 = {
+  version: 1;
+  start: string;
+  nodes: Record<string, { title: string; body: string; options: DTOption[] }>;
+};
+
+const END_TARGETS = ["end_done", "end_escalate", "end_not_applicable"] as const;
+
+const ADMIN_DRAFT_STORAGE_V3 = "vinnies_admin_article_draft_v3_tree_ui";
 
 function safeJsonParse(s: string) {
   const t = (s || "").trim();
@@ -33,66 +53,8 @@ function formatJsonOrThrow(s: string) {
   return JSON.stringify(obj, null, 2);
 }
 
-/**
- * decision_tree shape:
- * {
- *   version: 1,
- *   start: "<nodeId>",
- *   nodes: {
- *     "<nodeId>": { title, body, options: [{text:"YES", goto:"<nodeId2>"},{text:"NO", goto:"end_not_applicable"}] }
- *   }
- * }
- */
-type DTOption = { text: string; goto: string };
-type DTNode = { id: string; title: string; body: string; options: DTOption[] };
-type DecisionTreeV1 = {
-  version: 1;
-  start: string;
-  nodes: Record<string, { title: string; body: string; options: DTOption[] }>;
-};
-
-const END_TARGETS = ["end_done", "end_escalate", "end_not_applicable"] as const;
-
-function buildDecisionTreeJson(nodes: DTNode[], startId: string): DecisionTreeV1 {
-  const out: DecisionTreeV1 = { version: 1, start: startId, nodes: {} };
-  for (const n of nodes) {
-    out.nodes[n.id] = {
-      title: (n.title || "").trim(),
-      body: (n.body || "").trim(),
-      options: (n.options || []).map((o) => ({
-        text:
-          (o.text || "").trim().toUpperCase() === "YES"
-            ? "YES"
-            : (o.text || "").trim().toUpperCase() === "NO"
-              ? "NO"
-              : (o.text || "").trim(),
-        goto: (o.goto || "").trim(),
-      })),
-    };
-  }
-  return out;
-}
-
-function validateDecisionTree(nodes: DTNode[], startId: string): string | null {
-  if (!nodes.length) return "Decision Tree: add at least one step.";
-  const ids = new Set(nodes.map((n) => n.id));
-  if (!ids.has(startId)) return "Decision Tree: start node not found.";
-
-  for (const n of nodes) {
-    if (!n.id.trim()) return "Decision Tree: each step needs an id.";
-    if (!n.title.trim() && !n.body.trim()) return "Decision Tree: a step needs a question (title or body).";
-
-    const texts = (n.options || []).map((o) => (o.text || "").trim().toUpperCase());
-    if (!texts.includes("YES") || !texts.includes("NO")) return "Decision Tree: each step must have YES and NO options.";
-
-    for (const o of n.options || []) {
-      const target = (o.goto || "").trim();
-      if (!target) return `Decision Tree: missing goto for "${o.text}".`;
-      const isEnd = (END_TARGETS as readonly string[]).includes(target);
-      if (!isEnd && !ids.has(target)) return `Decision Tree: goto target missing: "${target}".`;
-    }
-  }
-  return null;
+function newStableId() {
+  return `n_${Math.random().toString(16).slice(2, 10)}${Math.random().toString(16).slice(2, 10)}`;
 }
 
 function ensureYesNoOptions(node: DTNode, fallbackYes: string, fallbackNo: string): DTNode {
@@ -131,8 +93,68 @@ function setGoto(node: DTNode, which: "YES" | "NO", goto: string): DTNode {
   return { ...node, options: opts };
 }
 
-function newStableId() {
-  return `n_${Math.random().toString(16).slice(2, 10)}${Math.random().toString(16).slice(2, 10)}`;
+function buildDecisionTreeJson(nodes: DTNode[], startId: string): DecisionTreeV1 {
+  const out: DecisionTreeV1 = { version: 1, start: startId, nodes: {} };
+  for (const n of nodes) {
+    out.nodes[n.id] = {
+      title: (n.title || "").trim(),
+      body: (n.body || "").trim(),
+      options: (n.options || []).map((o) => ({
+        text:
+          (o.text || "").trim().toUpperCase() === "YES"
+            ? "YES"
+            : (o.text || "").trim().toUpperCase() === "NO"
+              ? "NO"
+              : (o.text || "").trim(),
+        goto: (o.goto || "").trim(),
+      })),
+    };
+  }
+  return out;
+}
+
+function validateDecisionTree(nodes: DTNode[], startId: string): string | null {
+  if (!nodes.length) return "Tree: add at least one question.";
+  const ids = new Set(nodes.map((n) => n.id));
+  if (!ids.has(startId)) return "Tree: start node not found.";
+
+  for (const n of nodes) {
+    if (!n.id.trim()) return "Tree: each node needs an id.";
+    if (!n.title.trim() && !n.body.trim()) return "Tree: a node needs a question (title or body).";
+
+    const texts = (n.options || []).map((o) => (o.text || "").trim().toUpperCase());
+    if (!texts.includes("YES") || !texts.includes("NO")) return "Tree: each node must have YES and NO branches.";
+
+    for (const o of n.options || []) {
+      const target = (o.goto || "").trim();
+      if (!target) return `Tree: missing destination for "${o.text}".`;
+      const isEnd = (END_TARGETS as readonly string[]).includes(target);
+      if (!isEnd && !ids.has(target)) return `Tree: destination missing: "${target}".`;
+    }
+  }
+
+  // Reachability check: warn if orphan nodes exist
+  const reachable = new Set<string>();
+  const q: string[] = [startId];
+  while (q.length) {
+    const id = q.shift()!;
+    if (reachable.has(id)) continue;
+    reachable.add(id);
+    const node = nodes.find((n) => n.id === id);
+    if (!node) continue;
+    for (const which of ["YES", "NO"] as const) {
+      const t = getGoto(node, which);
+      if (!t) continue;
+      if ((END_TARGETS as readonly string[]).includes(t)) continue;
+      q.push(t);
+    }
+  }
+  const orphan = nodes.filter((n) => !reachable.has(n.id));
+  if (orphan.length) {
+    return `Tree: ${orphan.length} node(s) are unreachable. Tap Mini Map → fix branches, or delete them.`;
+  }
+
+  return null;
 }
 
 type SelectOption = { value: string; label: string; sub?: string };
@@ -158,7 +180,7 @@ function SelectModal(props: {
             </Pressable>
           </View>
 
-          <ScrollView style={{ maxHeight: 420 }} contentContainerStyle={{ paddingBottom: 10 }}>
+          <ScrollView style={{ maxHeight: 520 }} contentContainerStyle={{ paddingBottom: 10 }}>
             {options.map((o) => {
               const active = (selectedValue || "").trim() === o.value;
               return (
@@ -182,279 +204,57 @@ function SelectModal(props: {
   );
 }
 
-function PreviewRunModal(props: {
-  visible: boolean;
-  onClose: () => void;
-  nodes: DTNode[];
-  startId: string;
-  idToIndex: Map<string, number>;
-}) {
-  const { visible, onClose, nodes, startId, idToIndex } = props;
+/** Mini Map (tappable “tree view”) */
+function buildMiniMapLayout(nodes: DTNode[], startId: string) {
+  const byId = new Map(nodes.map((n) => [n.id, n] as const));
 
-  const [current, setCurrent] = useState<{ kind: "node"; id: string } | { kind: "end"; end: string }>({
-    kind: "node",
-    id: startId,
-  });
+  type Item = { id: string; depth: number };
+  const out: Item[] = [];
 
-  useEffect(() => {
-    if (!visible) return;
-    setCurrent({ kind: "node", id: startId });
-  }, [visible, startId]);
-
-  function labelForTarget(target: string) {
-    const t = (target || "").trim();
-    if (!t) return "—";
-    if (t === "end_done") return "END: Done";
-    if (t === "end_escalate") return "END: Escalate";
-    if (t === "end_not_applicable") return "END: Not applicable";
-    const idx = idToIndex.get(t);
-    if (idx === undefined) return t;
-    return `Step ${idx + 1}`;
-  }
-
-  function nodeById(id: string) {
-    const idx = idToIndex.get(id);
-    if (idx === undefined) return null;
-    return nodes[idx] || null;
-  }
-
-  function go(which: "YES" | "NO") {
-    if (current.kind !== "node") return;
-    const n = nodeById(current.id);
-    if (!n) return;
-
-    const goto = getGoto(n, which);
-    if (!goto) return;
-
-    if (goto === "end_done" || goto === "end_escalate" || goto === "end_not_applicable") {
-      setCurrent({ kind: "end", end: goto });
-      return;
-    }
-
-    if (!idToIndex.has(goto)) {
-      setCurrent({ kind: "end", end: "end_not_applicable" });
-      return;
-    }
-
-    setCurrent({ kind: "node", id: goto });
-  }
-
-  const view = useMemo(() => {
-    if (current.kind === "end") {
-      const title =
-        current.end === "end_done"
-          ? "Done"
-          : current.end === "end_escalate"
-            ? "Escalate"
-            : "Not applicable";
-
-      const body =
-        current.end === "end_done"
-          ? "This flow ends successfully."
-          : current.end === "end_escalate"
-            ? "This would trigger your Request Help / Live Chat path."
-            : "This flow ends because it’s not the right issue or needs a different path.";
-
-      return (
-        <View style={styles.previewRunBody}>
-          <Text style={styles.previewRunTitle}>{title}</Text>
-          <Text style={styles.previewRunText}>{body}</Text>
-
-          <View style={styles.row}>
-            <Pressable style={[styles.btn, styles.btnDark]} onPress={() => setCurrent({ kind: "node", id: startId })}>
-              <Text style={[styles.btnText, styles.btnDarkText]}>Restart</Text>
-            </Pressable>
-            <Pressable style={[styles.btn, styles.btnGhost]} onPress={onClose}>
-              <Text style={[styles.btnText, styles.btnGhostText]}>Close</Text>
-            </Pressable>
-          </View>
-        </View>
-      );
-    }
-
-    const n = nodeById(current.id);
-    if (!n) {
-      return (
-        <View style={styles.previewRunBody}>
-          <Text style={styles.previewRunTitle}>Missing step</Text>
-          <Text style={styles.previewRunText}>This step id can’t be found. (Tree needs fixing.)</Text>
-          <View style={styles.row}>
-            <Pressable style={[styles.btn, styles.btnDark]} onPress={() => setCurrent({ kind: "node", id: startId })}>
-              <Text style={[styles.btnText, styles.btnDarkText]}>Restart</Text>
-            </Pressable>
-            <Pressable style={[styles.btn, styles.btnGhost]} onPress={onClose}>
-              <Text style={[styles.btnText, styles.btnGhostText]}>Close</Text>
-            </Pressable>
-          </View>
-        </View>
-      );
-    }
-
-    const idx = idToIndex.get(n.id) ?? 0;
-    const yes = labelForTarget(getGoto(n, "YES"));
-    const no = labelForTarget(getGoto(n, "NO"));
-
-    return (
-      <View style={styles.previewRunBody}>
-        <Text style={styles.previewRunStep}>{`Preview Run • Step ${idx + 1}`}</Text>
-        <Text style={styles.previewRunTitle}>{(n.title || "").trim() || "Untitled question"}</Text>
-        {!!(n.body || "").trim() && <Text style={styles.previewRunText}>{n.body.trim()}</Text>}
-
-        <View style={styles.previewRunHintBox}>
-          <Text style={styles.previewRunHint}>YES → {yes}</Text>
-          <Text style={styles.previewRunHint}>NO → {no}</Text>
-        </View>
-
-        <View style={styles.previewRunBtns}>
-          <Pressable style={[styles.previewRunBtn, styles.previewRunBtnYes]} onPress={() => go("YES")}>
-            <Text style={styles.previewRunBtnText}>YES</Text>
-          </Pressable>
-          <Pressable style={[styles.previewRunBtn, styles.previewRunBtnNo]} onPress={() => go("NO")}>
-            <Text style={styles.previewRunBtnText}>NO</Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.row}>
-          <Pressable style={[styles.btn, styles.btnDark]} onPress={() => setCurrent({ kind: "node", id: startId })}>
-            <Text style={[styles.btnText, styles.btnDarkText]}>Restart</Text>
-          </Pressable>
-          <Pressable style={[styles.btn, styles.btnGhost]} onPress={onClose}>
-            <Text style={[styles.btnText, styles.btnGhostText]}>Close</Text>
-          </Pressable>
-        </View>
-      </View>
-    );
-  }, [current, nodes, startId, idToIndex, onClose]);
-
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.modalBackdrop}>
-        <View style={[styles.modalCard, { maxWidth: 640 }]}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Preview Run</Text>
-            <Pressable style={styles.modalClose} onPress={onClose}>
-              <Text style={styles.modalCloseText}>Close</Text>
-            </Pressable>
-          </View>
-          <ScrollView contentContainerStyle={{ padding: 12 }}>{view}</ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
-/**
- * ✅ Frontend-only derivation (preview only).
- * Backend is canonical; this is just so the admin can *see* what will be generated.
- */
-function derivePreviewFromDecisionTree(tree: any): {
-  clarifying_questions: string[];
-  steps: string[];
-  next_step: string | null;
-} {
-  if (!tree || typeof tree !== "object") return { clarifying_questions: [], steps: [], next_step: null };
-  const nodes = tree.nodes;
-  const start = tree.start;
-
-  if (!nodes || typeof nodes !== "object" || !start || typeof start !== "string" || !nodes[start]) {
-    return { clarifying_questions: [], steps: [], next_step: null };
-  }
-
-  function nodeText(n: any) {
-    const title = String(n?.title || "").trim();
-    const body = String(n?.body || "").trim();
-    if (title && body) return `${title} — ${body}`;
-    return title || body;
-  }
-
-  const root = nodes[start];
-  const rootQ = nodeText(root);
-  const clarifying_questions = rootQ ? [rootQ] : [];
-
-  // BFS reachable nodes for steps preview
-  const steps: string[] = [];
   const visited = new Set<string>();
-  const q: string[] = [start];
+  const q: Item[] = [{ id: startId, depth: 0 }];
 
   while (q.length) {
-    const id = q.shift()!;
-    if (visited.has(id)) continue;
-    visited.add(id);
+    const cur = q.shift()!;
+    if (visited.has(cur.id)) continue;
+    visited.add(cur.id);
+    out.push(cur);
 
-    const n = nodes[id];
-    const t = nodeText(n);
-    if (t) steps.push(t);
+    const node = byId.get(cur.id);
+    if (!node) continue;
 
-    const opts = Array.isArray(n?.options) ? n.options : [];
-    for (const o of opts) {
-      const goto = String(o?.goto || "").trim();
+    for (const which of ["YES", "NO"] as const) {
+      const goto = getGoto(node, which);
       if (!goto) continue;
-      if (goto === "end_done" || goto === "end_escalate" || goto === "end_not_applicable") continue;
-      if (nodes[goto] && !visited.has(goto)) q.push(goto);
+      if ((END_TARGETS as readonly string[]).includes(goto)) continue;
+      if (!byId.has(goto)) continue;
+      q.push({ id: goto, depth: cur.depth + 1 });
     }
   }
 
-  // next_step preview based on any end_escalate / end_done present
-  let sawEscalate = false;
-  let sawDone = false;
-
-  for (const key of Object.keys(nodes)) {
-    const n = nodes[key];
-    const opts = Array.isArray(n?.options) ? n.options : [];
-    for (const o of opts) {
-      const goto = String(o?.goto || "").trim();
-      if (goto === "end_escalate") sawEscalate = true;
-      if (goto === "end_done") sawDone = true;
-    }
-  }
-
-  const next_step = sawEscalate ? "request_help" : sawDone ? "issue_resolved" : null;
-
-  return { clarifying_questions, steps, next_step };
+  return out;
 }
 
-function buildAutoRetrievalText(input: {
-  title: string;
-  category: string;
-  severity: string;
-  years_min: number;
-  years_max: number;
-  customer_summary: string;
-  model_year_notes: any;
-  stop_and_escalate: any;
-  decision_tree: any;
-  derived: { clarifying_questions: string[]; steps: string[]; next_step: string | null };
-}) {
-  const parts: string[] = [];
-  parts.push(`Title: ${input.title}`);
-  parts.push(`Category: ${input.category}`);
-  parts.push(`Severity: ${input.severity}`);
-  parts.push(`Years: ${input.years_min}-${input.years_max}`);
-  parts.push(`Customer Summary: ${input.customer_summary}`);
+function endLabel(target: string) {
+  if (target === "end_done") return "Done";
+  if (target === "end_escalate") return "Escalate";
+  if (target === "end_not_applicable") return "N/A";
+  return "—";
+}
 
-  if (input.derived.next_step) parts.push(`Next Step: ${input.derived.next_step}`);
-
-  if (input.derived.clarifying_questions?.length) {
-    parts.push(`Clarifying Questions: ${input.derived.clarifying_questions.join(" | ")}`);
-  }
-
-  if (input.derived.steps?.length) {
-    parts.push(`Steps: ${input.derived.steps.join(" | ")}`);
-  }
-
-  if (input.model_year_notes) parts.push(`Model Year Notes: ${JSON.stringify(input.model_year_notes)}`);
-  if (input.stop_and_escalate) parts.push(`Stop and Escalate: ${JSON.stringify(input.stop_and_escalate)}`);
-  if (input.decision_tree) parts.push(`Decision Tree: ${JSON.stringify(input.decision_tree)}`);
-
-  return parts.join("\n");
+function shortText(s: string, n: number) {
+  const t = (s || "").trim();
+  if (!t) return "";
+  return t.length > n ? `${t.slice(0, n)}…` : t;
 }
 
 export default function Admin() {
   const router = useRouter();
 
   const [adminKey, setAdminKey] = useState("");
+  const [adminKeyReady, setAdminKeyReady] = useState(false);
 
-  // ===== Schema-aligned fields =====
+  // ===== Simple fields =====
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState("Water/Leaks");
   const [severity, setSeverity] = useState("Medium");
@@ -462,56 +262,107 @@ export default function Admin() {
   const [yearsMax, setYearsMax] = useState("2025");
   const [customerSummary, setCustomerSummary] = useState("");
 
-  // jsonb fields we still author
+  // ===== Optional JSON fields (kept, but tucked under Advanced) =====
   const [modelYearNotesJson, setModelYearNotesJson] = useState("");
   const [stopAndEscalateJson, setStopAndEscalateJson] = useState("");
 
-  // retrieval_text
-  const [retrievalAuto, setRetrievalAuto] = useState(true);
-  const [retrievalText, setRetrievalText] = useState("");
-
-  // decision_tree builder
-  const [decisionTreeJson, setDecisionTreeJson] = useState("");
-  const [dtEnabled, setDtEnabled] = useState(true);
-
+  // ===== Decision Tree Builder =====
   const [dtNodes, setDtNodes] = useState<DTNode[]>(() => {
-    const aId = newStableId();
-    const bId = newStableId();
+    const a = newStableId();
+    const b = newStableId();
     return [
-      ensureYesNoOptions({ id: aId, title: "Question 1", body: "", options: [] }, bId, "end_not_applicable"),
-      ensureYesNoOptions({ id: bId, title: "Question 2", body: "", options: [] }, "end_done", "end_escalate"),
+      ensureYesNoOptions({ id: a, title: "Start question (what should the AI ask first?)", body: "", options: [] }, b, "end_not_applicable"),
+      ensureYesNoOptions({ id: b, title: "Second question", body: "", options: [] }, "end_done", "end_escalate"),
     ];
   });
-
   const startId = useMemo(() => dtNodes[0]?.id || "", [dtNodes]);
 
-  // Selector modal state (YES/NO goto)
+  const [selectedNodeId, setSelectedNodeId] = useState<string>(() => dtNodes[0]?.id || "");
+  useEffect(() => {
+    if (!selectedNodeId && dtNodes[0]?.id) setSelectedNodeId(dtNodes[0].id);
+  }, [selectedNodeId, dtNodes]);
+
+  const selectedIndex = useMemo(() => dtNodes.findIndex((n) => n.id === selectedNodeId), [dtNodes, selectedNodeId]);
+
   const [selectOpen, setSelectOpen] = useState<{ visible: boolean; nodeIndex: number; which: "YES" | "NO" }>({
     visible: false,
     nodeIndex: 0,
     which: "YES",
   });
 
-  // Preview Run modal
-  const [previewOpen, setPreviewOpen] = useState(false);
-
-  // Derived preview collapsible
-  const [derivedOpen, setDerivedOpen] = useState(true);
-
+  const [miniMapOpen, setMiniMapOpen] = useState(true);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-
-  // Draft state helpers
   const [draftStatus, setDraftStatus] = useState<"idle" | "saved" | "restored">("idle");
   const draftSaveTimer = useRef<any>(null);
 
+  // Load admin key from storage (NO prompt here—gear icon handles that)
   useEffect(() => {
     (async () => {
-      const saved = (await AsyncStorage.getItem(ADMIN_KEY_STORAGE)) || "";
-      setAdminKey(saved);
+      try {
+        const k = await getSavedAdminKey();
+        setAdminKey((k || "").trim());
+      } finally {
+        setAdminKeyReady(true);
+      }
     })();
   }, []);
 
-  // idToIndex map for labels & preview
+  // Draft restore (v3)
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(ADMIN_DRAFT_STORAGE_V3);
+        if (!raw) return;
+        const obj = safeJsonParse(raw);
+        if (!obj) return;
+
+        setTitle(obj.title || "");
+        setCategory(obj.category || "Water/Leaks");
+        setSeverity(obj.severity || "Medium");
+        setYearsMin(String(obj.yearsMin ?? "2010"));
+        setYearsMax(String(obj.yearsMax ?? "2025"));
+        setCustomerSummary(obj.customerSummary || "");
+
+        setModelYearNotesJson(obj.modelYearNotesJson || "");
+        setStopAndEscalateJson(obj.stopAndEscalateJson || "");
+
+        if (Array.isArray(obj.dtNodes) && obj.dtNodes.length) {
+          setDtNodes(obj.dtNodes);
+          const first = obj.dtNodes[0]?.id;
+          if (first) setSelectedNodeId(first);
+        }
+        setDraftStatus("restored");
+      } catch {}
+    })();
+  }, []);
+
+  // Draft autosave (v3)
+  useEffect(() => {
+    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
+    draftSaveTimer.current = setTimeout(async () => {
+      try {
+        const payload = {
+          title,
+          category,
+          severity,
+          yearsMin,
+          yearsMax,
+          customerSummary,
+          modelYearNotesJson,
+          stopAndEscalateJson,
+          dtNodes,
+        };
+        await AsyncStorage.setItem(ADMIN_DRAFT_STORAGE_V3, JSON.stringify(payload));
+        setDraftStatus("saved");
+      } catch {}
+    }, 500);
+
+    return () => {
+      if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
+    };
+  }, [title, category, severity, yearsMin, yearsMax, customerSummary, modelYearNotesJson, stopAndEscalateJson, dtNodes]);
+
   const idToIndex = useMemo(() => {
     const m = new Map<string, number>();
     dtNodes.forEach((n, idx) => m.set(n.id, idx));
@@ -529,20 +380,11 @@ export default function Admin() {
     return `Step ${idx + 1}`;
   }
 
-  function getStepPreviewTitle(nodeId: string) {
-    const idx = idToIndex.get(nodeId);
-    if (idx === undefined) return "";
-    const node = dtNodes[idx];
-    const t = (node?.title || "").trim();
-    if (!t) return "";
-    return t.length > 60 ? `${t.slice(0, 60)}…` : t;
-  }
-
   const gotoOptions: SelectOption[] = useMemo(() => {
     const stepOpts: SelectOption[] = dtNodes.map((n, idx) => ({
       value: n.id,
       label: `Step ${idx + 1}`,
-      sub: getStepPreviewTitle(n.id) || " ",
+      sub: shortText(n.title || n.body || "", 72) || " ",
     }));
 
     const endOpts: SelectOption[] = [
@@ -552,272 +394,17 @@ export default function Admin() {
     ];
 
     return [...stepOpts, ...endOpts];
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dtNodes, idToIndex]);
+  }, [dtNodes]);
 
-  // Keep YES/NO options present with reasonable defaults
+  // Keep YES/NO options present
   useEffect(() => {
-    if (!dtEnabled) return;
     setDtNodes((prev) => {
-      if (!prev.length) return prev;
-      const ids = prev.map((n) => n.id);
-      const fallbackNo = "end_not_applicable";
-      return prev.map((n, idx) => ensureYesNoOptions(n, ids[idx + 1] || "end_done", fallbackNo));
+      return prev.map((n, i) => {
+        const fallbackYes = prev[i + 1]?.id || "end_done";
+        return ensureYesNoOptions(n, fallbackYes, "end_not_applicable");
+      });
     });
-  }, [dtEnabled]);
-
-  // Live validation status
-  const dtValidationError = useMemo(() => {
-    if (!dtEnabled) return null;
-    if (!dtNodes.length || !startId) return "Decision Tree: add at least one step.";
-    return validateDecisionTree(dtNodes, startId);
-  }, [dtEnabled, dtNodes, startId]);
-
-  // Keep decisionTreeJson in sync (builder -> JSON)
-  useEffect(() => {
-    if (!dtEnabled) return;
-    if (!dtNodes.length) {
-      setDecisionTreeJson("");
-      return;
-    }
-    const err = validateDecisionTree(dtNodes, startId);
-    if (err) return;
-    setDecisionTreeJson(JSON.stringify(buildDecisionTreeJson(dtNodes, startId), null, 2));
-  }, [dtEnabled, dtNodes, startId]);
-
-  // Derived preview (from current tree JSON)
-  const derivedPreview = useMemo(() => {
-    let tree: any = null;
-
-    if (dtEnabled) {
-      if (!dtNodes.length || !startId) return { clarifying_questions: [], steps: [], next_step: null };
-      const err = validateDecisionTree(dtNodes, startId);
-      if (err) return { clarifying_questions: [], steps: [], next_step: null };
-      tree = buildDecisionTreeJson(dtNodes, startId);
-    } else {
-      if (!decisionTreeJson.trim()) return { clarifying_questions: [], steps: [], next_step: null };
-      try {
-        tree = safeJsonParse(decisionTreeJson);
-      } catch {
-        return { clarifying_questions: [], steps: [], next_step: null };
-      }
-    }
-
-    return derivePreviewFromDecisionTree(tree);
-  }, [dtEnabled, dtNodes, startId, decisionTreeJson]);
-
-  // Autosave draft (debounced)
-  useEffect(() => {
-    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
-
-    draftSaveTimer.current = setTimeout(async () => {
-      try {
-        const draft = {
-          v: 2,
-          title,
-          category,
-          severity,
-          yearsMin,
-          yearsMax,
-          customerSummary,
-
-          modelYearNotesJson,
-          stopAndEscalateJson,
-
-          retrievalAuto,
-          retrievalText,
-
-          decisionTreeJson,
-          dtEnabled,
-          dtNodes,
-
-          derivedOpen,
-        };
-        await AsyncStorage.setItem(ADMIN_DRAFT_STORAGE_V2, JSON.stringify(draft));
-        setDraftStatus("saved");
-      } catch {
-        // ignore draft errors silently (never block admin)
-      }
-    }, 650);
-
-    return () => {
-      if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    title,
-    category,
-    severity,
-    yearsMin,
-    yearsMax,
-    customerSummary,
-    modelYearNotesJson,
-    stopAndEscalateJson,
-    retrievalAuto,
-    retrievalText,
-    decisionTreeJson,
-    dtEnabled,
-    dtNodes,
-    derivedOpen,
-  ]);
-
-  async function restoreDraft() {
-    try {
-      // Try v2 first
-      let raw = await AsyncStorage.getItem(ADMIN_DRAFT_STORAGE_V2);
-
-      // Fallback to v1
-      if (!raw) raw = await AsyncStorage.getItem(ADMIN_DRAFT_STORAGE_V1);
-
-      if (!raw) {
-        Alert.alert("No Draft Found", "There isn’t a saved draft on this device.");
-        return;
-      }
-
-      const d = JSON.parse(raw);
-
-      setTitle(d.title ?? "");
-      setCategory(d.category ?? "Water/Leaks");
-      setSeverity(d.severity ?? "Medium");
-      setYearsMin(String(d.yearsMin ?? "2010"));
-      setYearsMax(String(d.yearsMax ?? "2025"));
-      setCustomerSummary(d.customerSummary ?? "");
-
-      setModelYearNotesJson(d.modelYearNotesJson ?? "");
-      setStopAndEscalateJson(d.stopAndEscalateJson ?? "");
-
-      setRetrievalAuto(d.retrievalAuto !== false);
-      setRetrievalText(d.retrievalText ?? "");
-
-      setDtEnabled(d.dtEnabled !== false);
-      if (Array.isArray(d.dtNodes) && d.dtNodes.length) setDtNodes(d.dtNodes);
-
-      setDecisionTreeJson(d.decisionTreeJson ?? "");
-
-      setDerivedOpen(d.derivedOpen !== false);
-
-      setDraftStatus("restored");
-      Alert.alert("Draft Restored", "Loaded your last in-progress draft from this device.");
-    } catch (e: any) {
-      Alert.alert("Restore Failed", String(e?.message ?? e));
-    }
-  }
-
-  async function clearDraft() {
-    await AsyncStorage.removeItem(ADMIN_DRAFT_STORAGE_V2);
-    await AsyncStorage.removeItem(ADMIN_DRAFT_STORAGE_V1);
-    setDraftStatus("idle");
-    Alert.alert("Draft Cleared", "Saved draft removed from this device.");
-  }
-
-  const canSubmit = useMemo(() => {
-    if (!adminKey.trim()) return false;
-    if (!title.trim()) return false;
-
-    const ymin = Number(yearsMin);
-    const ymax = Number(yearsMax);
-    if (!Number.isFinite(ymin) || !Number.isFinite(ymax)) return false;
-    if (ymin > ymax) return false;
-
-    if (!customerSummary.trim()) return false;
-
-    if (dtEnabled && dtValidationError) return false;
-
-    return true;
-  }, [adminKey, title, yearsMin, yearsMax, customerSummary, dtEnabled, dtValidationError]);
-
-  async function saveKey() {
-    await AsyncStorage.setItem(ADMIN_KEY_STORAGE, adminKey.trim());
-    Alert.alert("Saved", "Admin key saved on this device.");
-  }
-
-  function clearForm() {
-    setTitle("");
-    setCategory("Water/Leaks");
-    setSeverity("Medium");
-    setYearsMin("2010");
-    setYearsMax("2025");
-    setCustomerSummary("");
-
-    setModelYearNotesJson("");
-    setStopAndEscalateJson("");
-
-    setRetrievalAuto(true);
-    setRetrievalText("");
-
-    setDecisionTreeJson("");
-    setDtEnabled(true);
-
-    const aId = newStableId();
-    const bId = newStableId();
-    setDtNodes([
-      ensureYesNoOptions({ id: aId, title: "Question 1", body: "", options: [] }, bId, "end_not_applicable"),
-      ensureYesNoOptions({ id: bId, title: "Question 2", body: "", options: [] }, "end_done", "end_escalate"),
-    ]);
-  }
-
-  function addQuestion() {
-    setDtNodes((prev) => {
-      const newId = newStableId();
-      const node = ensureYesNoOptions(
-        { id: newId, title: "New Question", body: "", options: [] },
-        "end_done",
-        "end_not_applicable"
-      );
-      return [...prev, node];
-    });
-  }
-
-  function addNodeLinked(fromIndex: number, which: "YES" | "NO") {
-    setDtNodes((prev) => {
-      const copy = [...prev];
-      const newId = newStableId();
-      const insertedIndex = fromIndex + 1;
-
-      const newNode = ensureYesNoOptions(
-        { id: newId, title: "New Question", body: "", options: [] },
-        copy[insertedIndex]?.id || "end_done",
-        "end_not_applicable"
-      );
-
-      copy.splice(insertedIndex, 0, newNode);
-
-      const from = copy[fromIndex];
-      const fixed = ensureYesNoOptions(from, copy[fromIndex + 1]?.id || "end_done", "end_not_applicable");
-      copy[fromIndex] = setGoto(fixed, which, newId);
-
-      return copy;
-    });
-  }
-
-  function removeNode(index: number) {
-    setDtNodes((prev) => {
-      if (prev.length <= 1) return prev;
-      const copy = [...prev];
-      const removed = copy.splice(index, 1)[0];
-      const removedId = removed.id;
-
-      return copy.map((n) => ({
-        ...n,
-        options: (n.options || []).map((o) => {
-          const t = (o.goto || "").trim();
-          return t === removedId ? { ...o, goto: "end_not_applicable" } : o;
-        }),
-      }));
-    });
-  }
-
-  function moveNode(index: number, dir: -1 | 1) {
-    setDtNodes((prev) => {
-      const j = index + dir;
-      if (j < 0 || j >= prev.length) return prev;
-      const copy = [...prev];
-      const tmp = copy[index];
-      copy[index] = copy[j];
-      copy[j] = tmp;
-      return copy;
-    });
-  }
+  }, []);
 
   function updateNode(index: number, patch: Partial<DTNode>) {
     setDtNodes((prev) => prev.map((n, i) => (i === index ? { ...n, ...patch } : n)));
@@ -834,101 +421,148 @@ export default function Admin() {
     );
   }
 
-  function applyBuilderToJsonNow() {
-    const err = validateDecisionTree(dtNodes, startId);
-    if (err) {
-      Alert.alert("Decision Tree Builder", err);
-      return;
-    }
-    setDecisionTreeJson(JSON.stringify(buildDecisionTreeJson(dtNodes, startId), null, 2));
-    Alert.alert("Decision Tree", "Builder JSON generated.");
-  }
+  function addNodeAfter(index: number) {
+    setDtNodes((prev) => {
+      const copy = [...prev];
+      const newId = newStableId();
+      const inserted = index + 1;
 
-  function pressFormatJson(label: string, value: string, setter: (s: string) => void) {
-    try {
-      if (!value.trim()) return;
-      setter(formatJsonOrThrow(value));
-      Alert.alert("Formatted", `${label} formatted.`);
-    } catch (e: any) {
-      Alert.alert("Invalid JSON", `${label}: ${String(e?.message ?? e)}`);
-    }
-  }
+      const node = ensureYesNoOptions(
+        { id: newId, title: "New question", body: "", options: [] },
+        copy[inserted]?.id || "end_done",
+        "end_not_applicable"
+      );
 
-  const flowPreview = useMemo(() => {
-    return dtNodes.map((n, idx) => {
-      const yes = labelForTarget(getGoto(n, "YES"));
-      const no = labelForTarget(getGoto(n, "NO"));
-      return `Step ${idx + 1}: YES → ${yes} | NO → ${no}`;
+      copy.splice(inserted, 0, node);
+      return copy;
     });
-  }, [dtNodes, idToIndex]);
+  }
+
+  function addNodeLinked(fromIndex: number, which: "YES" | "NO") {
+    setDtNodes((prev) => {
+      const copy = [...prev];
+      const newId = newStableId();
+      const insertedIndex = fromIndex + 1;
+
+      const newNode = ensureYesNoOptions(
+        { id: newId, title: "New question", body: "", options: [] },
+        copy[insertedIndex]?.id || "end_done",
+        "end_not_applicable"
+      );
+
+      copy.splice(insertedIndex, 0, newNode);
+
+      const from = copy[fromIndex];
+      const fixed = ensureYesNoOptions(from, copy[fromIndex + 1]?.id || "end_done", "end_not_applicable");
+      copy[fromIndex] = setGoto(fixed, which, newId);
+
+      return copy;
+    });
+
+    // Select new node
+    setTimeout(() => {
+      const newNode = dtNodes[fromIndex + 1];
+      if (newNode?.id) setSelectedNodeId(newNode.id);
+    }, 0);
+  }
+
+  function removeNode(index: number) {
+    setDtNodes((prev) => {
+      if (prev.length <= 1) return prev;
+      const copy = [...prev];
+      const removed = copy.splice(index, 1)[0];
+      const removedId = removed.id;
+
+      const fixed = copy.map((n) => ({
+        ...n,
+        options: (n.options || []).map((o) => {
+          const t = (o.goto || "").trim();
+          return t === removedId ? { ...o, goto: "end_not_applicable" } : o;
+        }),
+      }));
+
+      // If selected was removed, select start
+      if (selectedNodeId === removedId && fixed[0]?.id) setSelectedNodeId(fixed[0].id);
+      return fixed;
+    });
+  }
+
+  function duplicateNode(index: number) {
+    setDtNodes((prev) => {
+      const copy = [...prev];
+      const orig = copy[index];
+      const newId = newStableId();
+      const inserted = index + 1;
+
+      const dup: DTNode = ensureYesNoOptions(
+        {
+          id: newId,
+          title: orig.title ? `${orig.title} (copy)` : "Copy",
+          body: orig.body || "",
+          options: (orig.options || []).map((o) => ({ ...o })),
+        },
+        copy[inserted]?.id || "end_done",
+        "end_not_applicable"
+      );
+
+      copy.splice(inserted, 0, dup);
+      return copy;
+    });
+  }
+
+  function validateAll(): string | null {
+    if (!adminKey.trim()) return "Missing admin key. Go back and tap the gear icon to enter it.";
+    if (!title.trim()) return "Title is required.";
+    const ymin = Number(yearsMin);
+    const ymax = Number(yearsMax);
+    if (!Number.isFinite(ymin) || !Number.isFinite(ymax)) return "Years must be numbers.";
+    if (ymin > ymax) return "Years min cannot be greater than years max.";
+    if (!customerSummary.trim()) return "Customer summary is required.";
+
+    const dtErr = validateDecisionTree(dtNodes, startId);
+    if (dtErr) return dtErr;
+
+    // Optional JSON blocks
+    if (modelYearNotesJson.trim()) {
+      try {
+        safeJsonParse(modelYearNotesJson);
+      } catch {
+        return "Model Year Notes JSON is invalid (or clear it).";
+      }
+    }
+    if (stopAndEscalateJson.trim()) {
+      try {
+        safeJsonParse(stopAndEscalateJson);
+      } catch {
+        return "Stop & Escalate JSON is invalid (or clear it).";
+      }
+    }
+
+    return null;
+  }
 
   async function submit() {
+    const err = validateAll();
+    if (err) {
+      Alert.alert("Fix this first", err);
+      return;
+    }
+
     try {
       setSubmitting(true);
 
       const ymin = Number(yearsMin);
       const ymax = Number(yearsMax);
 
-      // decision_tree payload
-      let decisionTree: any = null;
-      if (dtEnabled) {
-        const err = validateDecisionTree(dtNodes, startId);
-        if (err) {
-          Alert.alert("Decision Tree Builder", err);
-          return;
-        }
-        decisionTree = buildDecisionTreeJson(dtNodes, startId);
-      } else if (decisionTreeJson.trim()) {
-        try {
-          decisionTree = safeJsonParse(decisionTreeJson);
-        } catch {
-          Alert.alert("Decision Tree JSON invalid", "Fix the JSON or clear the field.");
-          return;
-        }
-      }
+      // Build tree (backend derives clarifying_questions/steps/next_step)
+      const decisionTree = buildDecisionTreeJson(dtNodes, startId);
 
       let modelYearNotes: any = null;
-      if (modelYearNotesJson.trim()) {
-        try {
-          modelYearNotes = safeJsonParse(modelYearNotesJson);
-        } catch {
-          Alert.alert("Model Year Notes JSON invalid", "Fix the JSON or clear the field.");
-          return;
-        }
-      }
+      if (modelYearNotesJson.trim()) modelYearNotes = safeJsonParse(modelYearNotesJson);
 
       let stopAndEscalate: any = null;
-      if (stopAndEscalateJson.trim()) {
-        try {
-          stopAndEscalate = safeJsonParse(stopAndEscalateJson);
-        } catch {
-          Alert.alert("Stop & Escalate JSON invalid", "Fix the JSON or clear the field.");
-          return;
-        }
-      }
+      if (stopAndEscalateJson.trim()) stopAndEscalate = safeJsonParse(stopAndEscalateJson);
 
-      // Derived preview (for retrieval auto text)
-      const derived = decisionTree ? derivePreviewFromDecisionTree(decisionTree) : derivedPreview;
-
-      const tempForAuto = {
-        title: title.trim(),
-        category: category.trim(),
-        severity: severity.trim(),
-        years_min: ymin,
-        years_max: ymax,
-        customer_summary: customerSummary.trim(),
-        model_year_notes: modelYearNotes,
-        stop_and_escalate: stopAndEscalate,
-        decision_tree: decisionTree,
-        derived,
-      };
-
-      const finalRetrievalText = retrievalAuto
-        ? buildAutoRetrievalText(tempForAuto)
-        : (retrievalText || "").trim() || null;
-
-      // ✅ We do NOT send clarifying_questions/steps/next_step anymore.
-      // Backend derives them from decision_tree and stores them.
       const payload: any = {
         title: title.trim(),
         category: category.trim(),
@@ -938,7 +572,6 @@ export default function Admin() {
         customer_summary: customerSummary.trim(),
         model_year_notes: modelYearNotes,
         stop_and_escalate: stopAndEscalate,
-        retrieval_text: finalRetrievalText,
         decision_tree: decisionTree,
       };
 
@@ -954,13 +587,67 @@ export default function Admin() {
       const text = await r.text();
       if (!r.ok) throw new Error(text || `Request failed (${r.status})`);
 
-      Alert.alert("Success", "Article saved. (Tree-derived fields were generated automatically.)");
-      clearForm();
+      Alert.alert("Saved", "Article saved successfully.");
+      await AsyncStorage.removeItem(ADMIN_DRAFT_STORAGE_V3);
+      setDraftStatus("idle");
+
+      // Reset form to a fresh tree
+      const a = newStableId();
+      const b = newStableId();
+      setTitle("");
+      setCategory("Water/Leaks");
+      setSeverity("Medium");
+      setYearsMin("2010");
+      setYearsMax("2025");
+      setCustomerSummary("");
+      setModelYearNotesJson("");
+      setStopAndEscalateJson("");
+      setDtNodes([
+        ensureYesNoOptions({ id: a, title: "Start question (what should the AI ask first?)", body: "", options: [] }, b, "end_not_applicable"),
+        ensureYesNoOptions({ id: b, title: "Second question", body: "", options: [] }, "end_done", "end_escalate"),
+      ]);
+      setSelectedNodeId(a);
+      setAdvancedOpen(false);
+      setMiniMapOpen(true);
+      Keyboard.dismiss();
     } catch (e: any) {
       Alert.alert("Error", String(e?.message ?? e));
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function formatJsonField(label: string, value: string, setter: (s: string) => void) {
+    try {
+      if (!value.trim()) return;
+      setter(formatJsonOrThrow(value));
+      Alert.alert("Formatted", `${label} formatted.`);
+    } catch (e: any) {
+      Alert.alert("Invalid JSON", `${label}: ${String(e?.message ?? e)}`);
+    }
+  }
+
+  const dtValidationError = useMemo(() => validateDecisionTree(dtNodes, startId), [dtNodes, startId]);
+
+  const miniMap = useMemo(() => buildMiniMapLayout(dtNodes, startId), [dtNodes, startId]);
+  const selectedNode = selectedIndex >= 0 ? dtNodes[selectedIndex] : null;
+
+  // If key missing, we still allow viewing, but no save.
+  if (adminKeyReady && !adminKey.trim()) {
+    return (
+      <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
+        <View style={styles.header}>
+          <Text style={styles.h1}>Admin</Text>
+          <Text style={styles.sub}>
+            Missing admin key. Go back to the home screen and tap the gear icon to enter it.
+          </Text>
+
+          <Pressable style={[styles.btn, styles.btnGhost]} onPress={() => router.back()}>
+            <Text style={styles.btnTextGhost}>Back</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
   }
 
   return (
@@ -969,7 +656,9 @@ export default function Admin() {
         visible={selectOpen.visible}
         title={`Select destination for ${selectOpen.which}`}
         options={gotoOptions}
-        selectedValue={dtNodes[selectOpen.nodeIndex] ? getGoto(dtNodes[selectOpen.nodeIndex], selectOpen.which) : undefined}
+        selectedValue={
+          dtNodes[selectOpen.nodeIndex] ? getGoto(dtNodes[selectOpen.nodeIndex], selectOpen.which) : undefined
+        }
         onClose={() => setSelectOpen((s) => ({ ...s, visible: false }))}
         onSelect={(value) => {
           setYesNoGoto(selectOpen.nodeIndex, selectOpen.which, value);
@@ -977,632 +666,575 @@ export default function Admin() {
         }}
       />
 
-      <PreviewRunModal
-        visible={previewOpen}
-        onClose={() => setPreviewOpen(false)}
-        nodes={dtNodes}
-        startId={startId}
-        idToIndex={idToIndex}
-      />
-
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-        <View style={styles.header}>
-          <Text style={styles.title}>Admin</Text>
-          <Text style={styles.sub}>Create troubleshooting articles (decision_tree is the source of truth).</Text>
-
-          <View style={styles.headerBtns}>
-            <Pressable style={styles.smallBtn} onPress={() => router.push("/admin-inbox")}>
-              <Text style={styles.smallBtnText}>Live Chat Inbox</Text>
-            </Pressable>
-
-            <Pressable style={styles.smallBtn} onPress={() => router.push("/admin-session")}>
-              <Text style={styles.smallBtnText}>All AI Conversations</Text>
-            </Pressable>
-          </View>
-
-        </View>
-
-        {/* Admin Key */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Admin Key</Text>
-          <TextInput
-            value={adminKey}
-            onChangeText={setAdminKey}
-            placeholder="Paste ADMIN_API_KEY"
-            placeholderTextColor="rgba(255,255,255,0.35)"
-            autoCapitalize="none"
-            style={styles.input}
-          />
-          <View style={styles.row}>
-            <Pressable style={styles.btn} onPress={saveKey}>
-              <Text style={styles.btnText}>Save Key</Text>
-            </Pressable>
-          </View>
-        </View>
-
-        {/* Draft controls */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Draft</Text>
-          <Text style={styles.hint2}>
-            Autosaves on this device. Status:{" "}
-            <Text style={{ color: "rgba(255,255,255,0.9)", fontWeight: "900" }}>{draftStatus}</Text>
-          </Text>
-          <View style={styles.row}>
-            <Pressable style={[styles.btn, styles.btnDark]} onPress={restoreDraft}>
-              <Text style={[styles.btnText, styles.btnDarkText]}>Restore Draft</Text>
-            </Pressable>
-            <Pressable style={[styles.btn, styles.btnGhost]} onPress={clearDraft}>
-              <Text style={[styles.btnText, styles.btnGhostText]}>Clear Draft</Text>
-            </Pressable>
-          </View>
-        </View>
-
-        {/* Article */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Article (Schema Fields)</Text>
-
-          <Text style={styles.label}>Title</Text>
-          <TextInput
-            value={title}
-            onChangeText={setTitle}
-            style={styles.input}
-            placeholder="Ex: Fresh water pump runs but no water"
-            placeholderTextColor="rgba(255,255,255,0.35)"
-          />
-
-          <View style={styles.grid2}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 110 : 0}
+      >
+        <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
+          <View style={styles.headerRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.label}>Category</Text>
-              <TextInput
-                value={category}
-                onChangeText={setCategory}
-                style={styles.input}
-                placeholder="Water/Leaks"
-                placeholderTextColor="rgba(255,255,255,0.35)"
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.label}>Severity</Text>
-              <TextInput
-                value={severity}
-                onChangeText={setSeverity}
-                style={styles.input}
-                placeholder="Low / Medium / High"
-                placeholderTextColor="rgba(255,255,255,0.35)"
-              />
-            </View>
-          </View>
-
-          <View style={styles.grid2}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.label}>Years Min</Text>
-              <TextInput
-                value={yearsMin}
-                onChangeText={setYearsMin}
-                style={styles.input}
-                keyboardType="number-pad"
-                placeholder="2010"
-                placeholderTextColor="rgba(255,255,255,0.35)"
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.label}>Years Max</Text>
-              <TextInput
-                value={yearsMax}
-                onChangeText={setYearsMax}
-                style={styles.input}
-                keyboardType="number-pad"
-                placeholder="2025"
-                placeholderTextColor="rgba(255,255,255,0.35)"
-              />
-            </View>
-          </View>
-
-          <Text style={styles.label}>Customer Summary (required)</Text>
-          <TextInput
-            value={customerSummary}
-            onChangeText={setCustomerSummary}
-            style={[styles.input, styles.textArea]}
-            multiline
-            placeholder="Plain-English answer the customer sees…"
-            placeholderTextColor="rgba(255,255,255,0.35)"
-          />
-
-          {/* ✅ Derived fields preview (NOT authored) */}
-          <View style={styles.hr} />
-          <View style={styles.rowBetween}>
-            <Text style={styles.cardTitle}>Auto-generated from decision_tree</Text>
-            <Pressable style={[styles.smallBtn, derivedOpen ? styles.smallBtnOn : null]} onPress={() => setDerivedOpen((v) => !v)}>
-              <Text style={styles.smallBtnText}>{derivedOpen ? "Preview: ON" : "Preview: OFF"}</Text>
-            </Pressable>
-          </View>
-
-          <Text style={styles.hint2}>
-            You no longer fill out <Text style={{ fontWeight: "900", color: "rgba(255,255,255,0.85)" }}>clarifying_questions</Text>,{" "}
-            <Text style={{ fontWeight: "900", color: "rgba(255,255,255,0.85)" }}>steps</Text>, or{" "}
-            <Text style={{ fontWeight: "900", color: "rgba(255,255,255,0.85)" }}>next_step</Text>. The backend generates them automatically.
-          </Text>
-
-          {derivedOpen && (
-            <View style={styles.previewBox}>
-              <Text style={styles.previewLabel}>clarifying_questions</Text>
-              <Text style={styles.previewValue}>
-                {derivedPreview.clarifying_questions.length ? derivedPreview.clarifying_questions[0] : "—"}
+              <Text style={styles.h1}>Add Article</Text>
+              <Text style={styles.sub}>
+                Fill the basics → build the tree → Save. (No manual JSON required.)
               </Text>
-
-              <View style={{ height: 8 }} />
-
-              <Text style={styles.previewLabel}>steps (flattened)</Text>
-              {derivedPreview.steps.length ? (
-                derivedPreview.steps.slice(0, 8).map((s, i) => (
-                  <Text key={`${i}-${s}`} style={styles.previewLine2}>
-                    {i + 1}. {s}
-                  </Text>
-                ))
-              ) : (
-                <Text style={styles.previewValue}>—</Text>
-              )}
-              {derivedPreview.steps.length > 8 && (
-                <Text style={styles.hint2}>Showing first 8 steps (saved version includes all reachable steps).</Text>
-              )}
-
-              <View style={{ height: 8 }} />
-
-              <Text style={styles.previewLabel}>next_step</Text>
-              <Text style={styles.previewValue}>{derivedPreview.next_step || "—"}</Text>
             </View>
-          )}
 
-          {/* model_year_notes */}
-          <View style={styles.hr} />
-          <View style={styles.rowBetween}>
-            <Text style={styles.cardTitle}>model_year_notes (jsonb)</Text>
-            <Pressable
-              style={styles.smallBtn}
-              onPress={() => pressFormatJson("Model Year Notes", modelYearNotesJson, setModelYearNotesJson)}
-            >
-              <Text style={styles.smallBtnText}>Format JSON</Text>
-            </Pressable>
-          </View>
-          <TextInput
-            value={modelYearNotesJson}
-            onChangeText={setModelYearNotesJson}
-            style={[styles.input, styles.jsonArea]}
-            multiline
-            autoCapitalize="none"
-            placeholder={`{
-  "2010-2014": "Older pump models may differ.",
-  "2015-2025": "Check for inline filter near pump."
-}`}
-            placeholderTextColor="rgba(255,255,255,0.35)"
-          />
-
-          {/* stop_and_escalate */}
-          <View style={styles.hr} />
-          <View style={styles.rowBetween}>
-            <Text style={styles.cardTitle}>stop_and_escalate (jsonb)</Text>
-            <Pressable
-              style={styles.smallBtn}
-              onPress={() => pressFormatJson("Stop & Escalate", stopAndEscalateJson, setStopAndEscalateJson)}
-            >
-              <Text style={styles.smallBtnText}>Format JSON</Text>
-            </Pressable>
-          </View>
-          <TextInput
-            value={stopAndEscalateJson}
-            onChangeText={setStopAndEscalateJson}
-            style={[styles.input, styles.jsonArea]}
-            multiline
-            autoCapitalize="none"
-            placeholder={`{
-  "rules": [
-    { "if": "smoke", "message": "Stop immediately and request help." },
-    { "if": "burning smell", "message": "Shut off power and request help." }
-  ]
-}`}
-            placeholderTextColor="rgba(255,255,255,0.35)"
-          />
-
-          {/* retrieval_text */}
-          <View style={styles.hr} />
-          <View style={styles.rowBetween}>
-            <Text style={styles.cardTitle}>retrieval_text (text)</Text>
-            <Pressable style={[styles.smallBtn, retrievalAuto ? styles.smallBtnOn : null]} onPress={() => setRetrievalAuto((v) => !v)}>
-              <Text style={styles.smallBtnText}>{retrievalAuto ? "Auto: ON" : "Auto: OFF"}</Text>
-            </Pressable>
-          </View>
-          {!retrievalAuto && (
-            <TextInput
-              value={retrievalText}
-              onChangeText={setRetrievalText}
-              style={[styles.input, styles.textArea]}
-              multiline
-              placeholder="Write the best searchable version of this article…"
-              placeholderTextColor="rgba(255,255,255,0.35)"
-            />
-          )}
-
-          {/* ===== Decision Tree ===== */}
-          <View style={styles.hr} />
-          <View style={styles.rowBetween}>
-            <Text style={styles.cardTitle}>decision_tree (jsonb)</Text>
-            <Pressable style={[styles.smallBtn, dtEnabled ? styles.smallBtnOn : null]} onPress={() => setDtEnabled((v) => !v)}>
-              <Text style={styles.smallBtnText}>{dtEnabled ? "Builder: ON" : "Builder: OFF"}</Text>
+            <Pressable style={[styles.smallBtn]} onPress={() => router.back()}>
+              <Text style={styles.smallBtnText}>Back</Text>
             </Pressable>
           </View>
 
-          {dtEnabled && (
-            <View style={styles.builderBox}>
-              {/* Validation banner */}
-              <View style={[styles.validationBar, dtValidationError ? styles.validationBad : styles.validationGood]}>
-                <Text style={styles.validationText}>
-                  {dtValidationError ? `⚠️ ${dtValidationError}` : "✅ Decision tree looks valid"}
+          {/* Basics */}
+          <View style={styles.card}>
+            <View style={styles.cardTopRow}>
+              <Text style={styles.cardTitle}>Basics</Text>
+              <View style={styles.pill}>
+                <Text style={styles.pillText}>
+                  Draft: {draftStatus === "restored" ? "restored" : draftStatus === "saved" ? "saved" : "—"}
                 </Text>
               </View>
+            </View>
 
-              <View style={styles.rowBetween}>
-                <View>
-                  <Text style={styles.label}>Start Step</Text>
-                  <Text style={styles.readOnlyValue}>Step 1</Text>
-                </View>
+            <Text style={styles.label}>Title</Text>
+            <TextInput
+              value={title}
+              onChangeText={setTitle}
+              placeholder="e.g., Water pump runs but no water"
+              placeholderTextColor="rgba(255,255,255,0.45)"
+              style={styles.input}
+            />
 
-                <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
-                  <Pressable style={[styles.smallBtn, { height: 38 }]} onPress={() => setPreviewOpen(true)} disabled={!!dtValidationError}>
-                    <Text style={styles.smallBtnText}>{dtValidationError ? "Fix tree to preview" : "Preview Run"}</Text>
-                  </Pressable>
-                </View>
+            <View style={styles.grid2}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label}>Category</Text>
+                <TextInput
+                  value={category}
+                  onChangeText={setCategory}
+                  placeholder="Water/Leaks"
+                  placeholderTextColor="rgba(255,255,255,0.45)"
+                  style={styles.input}
+                />
               </View>
-
-              <Text style={[styles.label, { marginTop: 12 }]}>Flow Preview</Text>
-              <View style={styles.previewBox}>
-                {flowPreview.map((line) => (
-                  <Text key={line} style={styles.previewLine}>
-                    {line}
-                  </Text>
-                ))}
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label}>Severity</Text>
+                <TextInput
+                  value={severity}
+                  onChangeText={setSeverity}
+                  placeholder="Low / Medium / High"
+                  placeholderTextColor="rgba(255,255,255,0.45)"
+                  style={styles.input}
+                />
               </View>
+            </View>
 
-              <View style={styles.rowBetween}>
-                <Text style={[styles.label, { marginTop: 12 }]}>Questions</Text>
-                <Pressable style={styles.smallBtn} onPress={addQuestion}>
-                  <Text style={styles.smallBtnText}>+ Add Question</Text>
+            <View style={styles.grid2}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label}>Years Min</Text>
+                <TextInput
+                  value={yearsMin}
+                  onChangeText={setYearsMin}
+                  keyboardType="number-pad"
+                  placeholder="2010"
+                  placeholderTextColor="rgba(255,255,255,0.45)"
+                  style={styles.input}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label}>Years Max</Text>
+                <TextInput
+                  value={yearsMax}
+                  onChangeText={setYearsMax}
+                  keyboardType="number-pad"
+                  placeholder="2025"
+                  placeholderTextColor="rgba(255,255,255,0.45)"
+                  style={styles.input}
+                />
+              </View>
+            </View>
+
+            <Text style={styles.label}>Customer Summary (what the AI answers with)</Text>
+            <TextInput
+              value={customerSummary}
+              onChangeText={setCustomerSummary}
+              placeholder="Short, clear explanation + quick checks. Keep it customer-friendly."
+              placeholderTextColor="rgba(255,255,255,0.45)"
+              style={[styles.input, { minHeight: 92 }]}
+              multiline
+            />
+          </View>
+
+          {/* Mini Map + Tree Builder */}
+          <View style={styles.card}>
+            <View style={styles.cardTopRow}>
+              <Text style={styles.cardTitle}>Troubleshooting Tree</Text>
+
+              <View style={{ flexDirection: "row", gap: 10, alignItems: "center" }}>
+                <Pressable
+                  style={[styles.smallBtn, miniMapOpen ? styles.smallBtnOn : null]}
+                  onPress={() => setMiniMapOpen((v) => !v)}
+                >
+                  <Text style={styles.smallBtnText}>{miniMapOpen ? "Mini Map: ON" : "Mini Map: OFF"}</Text>
                 </Pressable>
-              </View>
 
-              {dtNodes.map((n, idx) => {
-                const yesGoto = getGoto(n, "YES");
-                const noGoto = getGoto(n, "NO");
-                const yesLabel = labelForTarget(yesGoto);
-                const noLabel = labelForTarget(noGoto);
-
-                return (
-                  <View key={n.id} style={styles.nodeCard}>
-                    <View style={styles.rowBetween}>
-                      <Text style={styles.nodeTitle}>{`Step ${idx + 1}`}</Text>
-                      <View style={{ flexDirection: "row", gap: 8 }}>
-                        <Pressable style={styles.tinyBtn} onPress={() => moveNode(idx, -1)}>
-                          <Text style={styles.tinyBtnText}>↑</Text>
-                        </Pressable>
-                        <Pressable style={styles.tinyBtn} onPress={() => moveNode(idx, 1)}>
-                          <Text style={styles.tinyBtnText}>↓</Text>
-                        </Pressable>
-                        <Pressable
-                          style={[
-                            styles.tinyBtn,
-                            { backgroundColor: "rgba(255,60,60,0.18)", borderColor: "rgba(255,60,60,0.35)" },
-                          ]}
-                          onPress={() => removeNode(idx)}
-                        >
-                          <Text style={styles.tinyBtnText}>Remove</Text>
-                        </Pressable>
-                      </View>
-                    </View>
-
-                    <Text style={styles.hint2}>
-                      Internal id (stable):{" "}
-                      <Text style={{ fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" }}>{n.id}</Text>
-                    </Text>
-
-                    <Text style={styles.label}>Question Title</Text>
-                    <TextInput
-                      value={n.title}
-                      onChangeText={(t) => updateNode(idx, { title: t })}
-                      style={styles.input}
-                      placeholder="Ex: Is the pump running?"
-                      placeholderTextColor="rgba(255,255,255,0.35)"
-                    />
-
-                    <Text style={styles.label}>Question Body</Text>
-                    <TextInput
-                      value={n.body}
-                      onChangeText={(t) => updateNode(idx, { body: t })}
-                      style={[styles.input, styles.textArea]}
-                      multiline
-                      placeholder="What should the user check? Where to look?"
-                      placeholderTextColor="rgba(255,255,255,0.35)"
-                    />
-
-                    <View style={styles.ynBox}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.ynLabel}>YES →</Text>
-                        <Pressable
-                          style={styles.selectBtn}
-                          onPress={() => setSelectOpen({ visible: true, nodeIndex: idx, which: "YES" })}
-                        >
-                          <Text style={styles.selectBtnText}>{yesLabel}</Text>
-                          <Text style={styles.selectChevron}>▾</Text>
-                        </Pressable>
-
-                        <View style={styles.row}>
-                          <Pressable style={[styles.btn, styles.btnDark]} onPress={() => addNodeLinked(idx, "YES")}>
-                            <Text style={[styles.btnText, styles.btnDarkText]}>YES → New Step</Text>
-                          </Pressable>
-                        </View>
-                      </View>
-
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.ynLabel}>NO →</Text>
-                        <Pressable
-                          style={styles.selectBtn}
-                          onPress={() => setSelectOpen({ visible: true, nodeIndex: idx, which: "NO" })}
-                        >
-                          <Text style={styles.selectBtnText}>{noLabel}</Text>
-                          <Text style={styles.selectChevron}>▾</Text>
-                        </Pressable>
-
-                        <View style={styles.row}>
-                          <Pressable style={[styles.btn, styles.btnDark]} onPress={() => addNodeLinked(idx, "NO")}>
-                            <Text style={[styles.btnText, styles.btnDarkText]}>NO → New Step</Text>
-                          </Pressable>
-                        </View>
-                      </View>
-                    </View>
-                  </View>
-                );
-              })}
-
-              <View style={styles.row}>
-                <Pressable style={[styles.btn, styles.btnDark]} onPress={applyBuilderToJsonNow} disabled={!!dtValidationError}>
-                  <Text style={[styles.btnText, styles.btnDarkText]}>
-                    {dtValidationError ? "Fix tree to generate" : "Generate JSON Now"}
-                  </Text>
+                <Pressable style={styles.smallBtn} onPress={() => addNodeAfter(dtNodes.length - 1)}>
+                  <Text style={styles.smallBtnText}>+ Add Node</Text>
                 </Pressable>
               </View>
             </View>
-          )}
 
-          <Text style={styles.label}>Decision Tree JSON (optional)</Text>
-          <Text style={styles.hint2}>Editing this directly turns builder off.</Text>
-          <TextInput
-            value={decisionTreeJson}
-            onChangeText={(t) => {
-              setDecisionTreeJson(t);
-              if (dtEnabled) setDtEnabled(false);
-            }}
-            style={[styles.input, styles.jsonArea]}
-            multiline
-            autoCapitalize="none"
-            placeholder={`{
-  "version": 1,
-  "start": "<nodeId>",
-  "nodes": { ... }
-}`}
-            placeholderTextColor="rgba(255,255,255,0.35)"
-          />
-          <View style={styles.row}>
-            <Pressable style={[styles.btn, styles.btnDark]} onPress={() => pressFormatJson("Decision Tree", decisionTreeJson, setDecisionTreeJson)}>
-              <Text style={[styles.btnText, styles.btnDarkText]}>Format Decision Tree JSON</Text>
-            </Pressable>
+            {!!dtValidationError && (
+              <View style={styles.warnBox}>
+                <Text style={styles.warnText}>{dtValidationError}</Text>
+              </View>
+            )}
+
+            {miniMapOpen && (
+              <View style={styles.mapWrap}>
+                <Text style={styles.mapTitle}>Mini Map (tap to jump)</Text>
+
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  <View style={styles.mapRow}>
+                    {miniMap.map((m, i) => {
+                      const idx = idToIndex.get(m.id);
+                      const n = idx === undefined ? null : dtNodes[idx];
+                      if (!n) return null;
+
+                      const stepNum = (idx ?? 0) + 1;
+                      const yes = getGoto(n, "YES");
+                      const no = getGoto(n, "NO");
+
+                      const isSelected = m.id === selectedNodeId;
+
+                      return (
+                        <Pressable
+                          key={`${m.id}-${i}`}
+                          onPress={() => setSelectedNodeId(m.id)}
+                          style={[
+                            styles.mapNode,
+                            isSelected ? styles.mapNodeSelected : null,
+                            m.depth === 0 ? styles.mapStart : null,
+                          ]}
+                        >
+                          <Text style={styles.mapNodeTitle}>
+                            {m.depth === 0 ? "START" : `Step ${stepNum}`}
+                          </Text>
+                          <Text style={styles.mapNodeText}>{shortText(n.title || n.body || "", 46) || "—"}</Text>
+
+                          <View style={styles.mapBranches}>
+                            <View style={styles.branchChip}>
+                              <Text style={styles.branchChipLabel}>Y</Text>
+                              <Text style={styles.branchChipText}>
+                                {((END_TARGETS as readonly string[]).includes(yes) ? endLabel(yes) : labelForTarget(yes)).replace("END: ", "")}
+                              </Text>
+                            </View>
+                            <View style={styles.branchChip}>
+                              <Text style={styles.branchChipLabel}>N</Text>
+                              <Text style={styles.branchChipText}>
+                                {((END_TARGETS as readonly string[]).includes(no) ? endLabel(no) : labelForTarget(no)).replace("END: ", "")}
+                              </Text>
+                            </View>
+                          </View>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </ScrollView>
+
+                <Text style={styles.mapHint}>
+                  Tip: If a node is unreachable, it won’t appear here—fix the branches or delete the orphan node.
+                </Text>
+              </View>
+            )}
+
+            {/* Selected Node Editor */}
+            <View style={styles.nodeEditor}>
+              <View style={styles.nodeHeader}>
+                <Text style={styles.nodeHeaderTitle}>
+                  {selectedIndex >= 0 ? (selectedIndex === 0 ? "Start Node" : `Step ${selectedIndex + 1}`) : "Node"}
+                </Text>
+
+                <View style={{ flexDirection: "row", gap: 8 }}>
+                  {selectedIndex >= 0 && (
+                    <>
+                      <Pressable
+                        style={styles.smallBtn}
+                        onPress={() => addNodeLinked(selectedIndex, "YES")}
+                      >
+                        <Text style={styles.smallBtnText}>+ Branch YES</Text>
+                      </Pressable>
+                      <Pressable
+                        style={styles.smallBtn}
+                        onPress={() => addNodeLinked(selectedIndex, "NO")}
+                      >
+                        <Text style={styles.smallBtnText}>+ Branch NO</Text>
+                      </Pressable>
+                    </>
+                  )}
+                </View>
+              </View>
+
+              {!selectedNode ? (
+                <Text style={styles.sub}>Tap a node in the mini map to edit it.</Text>
+              ) : (
+                <>
+                  <Text style={styles.label}>Question (shown to user)</Text>
+                  <TextInput
+                    value={selectedNode.title}
+                    onChangeText={(v) => updateNode(selectedIndex, { title: v })}
+                    placeholder="e.g., When you turn on the pump, do you hear it running?"
+                    placeholderTextColor="rgba(255,255,255,0.45)"
+                    style={styles.input}
+                    multiline
+                  />
+
+                  <Text style={styles.label}>Optional Notes (AI can include this as guidance)</Text>
+                  <TextInput
+                    value={selectedNode.body}
+                    onChangeText={(v) => updateNode(selectedIndex, { body: v })}
+                    placeholder="Optional extra context: where to look, what to listen for, safety note…"
+                    placeholderTextColor="rgba(255,255,255,0.45)"
+                    style={[styles.input, { minHeight: 84 }]}
+                    multiline
+                  />
+
+                  <View style={styles.branchesRow}>
+                    <View style={styles.branchBox}>
+                      <Text style={styles.branchTitle}>YES →</Text>
+                      <Pressable
+                        onPress={() => setSelectOpen({ visible: true, nodeIndex: selectedIndex, which: "YES" })}
+                        style={styles.branchPick}
+                      >
+                        <Text style={styles.branchPickText}>{labelForTarget(getGoto(selectedNode, "YES"))}</Text>
+                      </Pressable>
+                    </View>
+
+                    <View style={styles.branchBox}>
+                      <Text style={styles.branchTitle}>NO →</Text>
+                      <Pressable
+                        onPress={() => setSelectOpen({ visible: true, nodeIndex: selectedIndex, which: "NO" })}
+                        style={styles.branchPick}
+                      >
+                        <Text style={styles.branchPickText}>{labelForTarget(getGoto(selectedNode, "NO"))}</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+
+                  <View style={styles.nodeActions}>
+                    <Pressable style={[styles.smallBtn]} onPress={() => duplicateNode(selectedIndex)}>
+                      <Text style={styles.smallBtnText}>Duplicate</Text>
+                    </Pressable>
+
+                    <Pressable
+                      style={[styles.smallBtn, styles.smallDanger]}
+                      onPress={() => {
+                        if (dtNodes.length <= 1) return;
+                        Alert.alert("Delete node?", "This will redirect any branches pointing here to END: Not applicable.", [
+                          { text: "Cancel", style: "cancel" },
+                          { text: "Delete", style: "destructive", onPress: () => removeNode(selectedIndex) },
+                        ]);
+                      }}
+                      disabled={dtNodes.length <= 1}
+                    >
+                      <Text style={styles.smallBtnText}>Delete</Text>
+                    </Pressable>
+                  </View>
+                </>
+              )}
+            </View>
           </View>
 
-          {/* Submit */}
-          <View style={styles.row}>
+          {/* Advanced (optional JSON helpers) */}
+          <View style={styles.card}>
+            <View style={styles.cardTopRow}>
+              <Text style={styles.cardTitle}>Advanced (optional)</Text>
+              <Pressable
+                style={[styles.smallBtn, advancedOpen ? styles.smallBtnOn : null]}
+                onPress={() => setAdvancedOpen((v) => !v)}
+              >
+                <Text style={styles.smallBtnText}>{advancedOpen ? "Hide" : "Show"}</Text>
+              </Pressable>
+            </View>
+
+            {!advancedOpen ? (
+              <Text style={styles.sub}>Only use these if you need model-year specific notes or a hard “stop & escalate” rule.</Text>
+            ) : (
+              <>
+                <Text style={styles.label}>Model Year Notes (JSON)</Text>
+                <TextInput
+                  value={modelYearNotesJson}
+                  onChangeText={setModelYearNotesJson}
+                  placeholder='Optional JSON. Example: [{"years":[2018,2019],"note":"..."}]'
+                  placeholderTextColor="rgba(255,255,255,0.45)"
+                  style={[styles.input, { minHeight: 92, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" }]}
+                  multiline
+                />
+                <View style={{ flexDirection: "row", gap: 10 }}>
+                  <Pressable
+                    style={styles.smallBtn}
+                    onPress={() => formatJsonField("Model Year Notes", modelYearNotesJson, setModelYearNotesJson)}
+                  >
+                    <Text style={styles.smallBtnText}>Format JSON</Text>
+                  </Pressable>
+                  <Pressable style={styles.smallBtn} onPress={() => setModelYearNotesJson("")}>
+                    <Text style={styles.smallBtnText}>Clear</Text>
+                  </Pressable>
+                </View>
+
+                <View style={{ height: 12 }} />
+
+                <Text style={styles.label}>Stop & Escalate (JSON)</Text>
+                <TextInput
+                  value={stopAndEscalateJson}
+                  onChangeText={setStopAndEscalateJson}
+                  placeholder='Optional JSON. Example: [{"if":"smell gas","action":"end_escalate","note":"..."}]'
+                  placeholderTextColor="rgba(255,255,255,0.45)"
+                  style={[styles.input, { minHeight: 92, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" }]}
+                  multiline
+                />
+                <View style={{ flexDirection: "row", gap: 10 }}>
+                  <Pressable
+                    style={styles.smallBtn}
+                    onPress={() => formatJsonField("Stop & Escalate", stopAndEscalateJson, setStopAndEscalateJson)}
+                  >
+                    <Text style={styles.smallBtnText}>Format JSON</Text>
+                  </Pressable>
+                  <Pressable style={styles.smallBtn} onPress={() => setStopAndEscalateJson("")}>
+                    <Text style={styles.smallBtnText}>Clear</Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
+          </View>
+
+          {/* Save bar */}
+          <View style={styles.saveBar}>
             <Pressable
-              style={[styles.btn, (!canSubmit || submitting) && styles.btnDisabled]}
-              disabled={!canSubmit || submitting}
-              onPress={submit}
+              style={[styles.btn, (!!dtValidationError || submitting) && styles.btnDisabled]}
+              disabled={!!dtValidationError || submitting}
+              onPress={() => {
+                Keyboard.dismiss();
+                submit();
+              }}
             >
               <Text style={styles.btnText}>{submitting ? "Saving…" : "Save Article"}</Text>
             </Pressable>
 
-            <Pressable style={[styles.btn, styles.btnGhost]} onPress={clearForm} disabled={submitting}>
-              <Text style={[styles.btnText, styles.btnGhostText]}>Clear</Text>
+            <Pressable
+              style={[styles.btn, styles.btnGhost]}
+              onPress={async () => {
+                Alert.alert("Clear draft?", "This clears the form and removes the saved draft.", [
+                  { text: "Cancel", style: "cancel" },
+                  {
+                    text: "Clear",
+                    style: "destructive",
+                    onPress: async () => {
+                      await AsyncStorage.removeItem(ADMIN_DRAFT_STORAGE_V3);
+                      setDraftStatus("idle");
+
+                      const a = newStableId();
+                      const b = newStableId();
+                      setTitle("");
+                      setCategory("Water/Leaks");
+                      setSeverity("Medium");
+                      setYearsMin("2010");
+                      setYearsMax("2025");
+                      setCustomerSummary("");
+                      setModelYearNotesJson("");
+                      setStopAndEscalateJson("");
+                      setDtNodes([
+                        ensureYesNoOptions({ id: a, title: "Start question (what should the AI ask first?)", body: "", options: [] }, b, "end_not_applicable"),
+                        ensureYesNoOptions({ id: b, title: "Second question", body: "", options: [] }, "end_done", "end_escalate"),
+                      ]);
+                      setSelectedNodeId(a);
+                      setAdvancedOpen(false);
+                      setMiniMapOpen(true);
+                      Keyboard.dismiss();
+                    },
+                  },
+                ]);
+              }}
+              disabled={submitting}
+            >
+              <Text style={styles.btnTextGhost}>Clear Draft</Text>
             </Pressable>
           </View>
 
-          <Text style={styles.hint}>Endpoint: POST {API_BASE_URL}/v1/admin/articles</Text>
-        </View>
-
-        <View style={{ height: 30 }} />
-      </ScrollView>
+          <View style={{ height: 16 }} />
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#0B0F14" },
-  scroll: { padding: 16, paddingBottom: 40 },
+  safe: { flex: 1, backgroundColor: "#071018" },
+  page: { padding: 14, paddingBottom: 24, gap: 12 },
 
-  header: { gap: 6, marginBottom: 12 },
-  title: { color: "white", fontSize: 22, fontWeight: "900" },
-  sub: { color: "rgba(255,255,255,0.65)" },
-  headerBtns: { flexDirection: "row", gap: 10, marginTop: 6 },
+  header: { padding: 14, gap: 10 },
+  headerRow: { flexDirection: "row", alignItems: "flex-start", gap: 12 },
+
+  h1: { color: "white", fontSize: 22, fontWeight: "900" },
+  sub: { color: "rgba(255,255,255,0.70)", fontWeight: "700", marginTop: 4 },
 
   card: {
-    padding: 14,
     borderRadius: 18,
+    padding: 14,
     backgroundColor: "rgba(255,255,255,0.06)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.10)",
     gap: 10,
-    marginTop: 12,
   },
-  cardTitle: { color: "white", fontSize: 15, fontWeight: "900" },
+  cardTopRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 10 },
+  cardTitle: { color: "rgba(241,238,219,0.95)", fontSize: 16, fontWeight: "900" },
 
-  label: { color: "rgba(255,255,255,0.75)", fontWeight: "800", marginTop: 8 },
-
+  label: { color: "rgba(255,255,255,0.78)", fontWeight: "900", fontSize: 12, marginTop: 4 },
   input: {
     borderRadius: 14,
     paddingHorizontal: 12,
-    paddingVertical: Platform.OS === "ios" ? 12 : 10,
-    backgroundColor: "rgba(255,255,255,0.07)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
+    paddingVertical: 10,
     color: "white",
-    marginTop: 6,
-  },
-  textArea: { minHeight: 92, textAlignVertical: "top" },
-  jsonArea: {
-    minHeight: 160,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-    textAlignVertical: "top",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    fontWeight: "800",
   },
 
   grid2: { flexDirection: "row", gap: 10 },
 
-  row: { flexDirection: "row", gap: 10, marginTop: 10 },
-  rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 6 },
+  pill: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
+  pillText: { color: "rgba(255,255,255,0.85)", fontWeight: "900", fontSize: 12 },
+
+  warnBox: {
+    padding: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(245,158,11,0.35)",
+    backgroundColor: "rgba(245,158,11,0.14)",
+  },
+  warnText: { color: "white", fontWeight: "900" },
+
+  smallBtn: {
+    height: 34,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.10)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  smallBtnOn: { backgroundColor: "rgba(241,238,219,0.14)", borderColor: "rgba(241,238,219,0.22)" },
+  smallDanger: { backgroundColor: "rgba(239,68,68,0.14)", borderColor: "rgba(239,68,68,0.22)" },
+  smallBtnText: { color: "white", fontWeight: "900", fontSize: 12 },
+
+  mapWrap: {
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    backgroundColor: "rgba(0,0,0,0.20)",
+    gap: 8,
+  },
+  mapTitle: { color: "white", fontWeight: "900" },
+  mapRow: { flexDirection: "row", gap: 10, paddingVertical: 6 },
+  mapNode: {
+    width: 190,
+    borderRadius: 14,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    gap: 6,
+  },
+  mapNodeSelected: { borderColor: "rgba(241,238,219,0.35)", backgroundColor: "rgba(241,238,219,0.10)" },
+  mapStart: { borderColor: "rgba(59,130,246,0.35)" },
+  mapNodeTitle: { color: "rgba(255,255,255,0.85)", fontWeight: "900", fontSize: 12 },
+  mapNodeText: { color: "white", fontWeight: "800", lineHeight: 18 },
+
+  mapBranches: { flexDirection: "row", gap: 8, marginTop: 2 },
+  branchChip: {
+    flexDirection: "row",
+    gap: 6,
+    alignItems: "center",
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
+  branchChipLabel: { color: "rgba(241,238,219,0.95)", fontWeight: "900", fontSize: 12 },
+  branchChipText: { color: "white", fontWeight: "900", fontSize: 12 },
+
+  mapHint: { color: "rgba(255,255,255,0.60)", fontWeight: "700", fontSize: 12 },
+
+  nodeEditor: {
+    marginTop: 8,
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    backgroundColor: "rgba(255,255,255,0.05)",
+    gap: 10,
+  },
+  nodeHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 10 },
+  nodeHeaderTitle: { color: "white", fontWeight: "900", fontSize: 15 },
+
+  branchesRow: { flexDirection: "row", gap: 10 },
+  branchBox: {
+    flex: 1,
+    borderRadius: 14,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    gap: 8,
+  },
+  branchTitle: { color: "rgba(255,255,255,0.75)", fontWeight: "900" },
+  branchPick: {
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(0,0,0,0.18)",
+  },
+  branchPickText: { color: "white", fontWeight: "900" },
+
+  nodeActions: { flexDirection: "row", gap: 10, justifyContent: "flex-end" },
+
+  saveBar: { flexDirection: "row", gap: 10, marginTop: 4 },
 
   btn: {
     flex: 1,
-    height: 48,
+    height: 52,
     borderRadius: 16,
-    backgroundColor: "white",
+    backgroundColor: "rgba(241,238,219,0.95)",
     alignItems: "center",
     justifyContent: "center",
   },
-  btnDisabled: { opacity: 0.4 },
-  btnText: { color: "#0B0F14", fontWeight: "900" },
+  btnDisabled: { opacity: 0.45 },
+  btnText: { color: "#043553", fontWeight: "900", fontSize: 15 },
 
-  btnGhost: { backgroundColor: "transparent", borderWidth: 1, borderColor: "rgba(255,255,255,0.18)" },
-  btnGhostText: { color: "white" },
-
-  btnDark: { backgroundColor: "rgba(255,255,255,0.12)", borderWidth: 1, borderColor: "rgba(255,255,255,0.16)" },
-  btnDarkText: { color: "white" },
-
-  smallBtn: {
-    height: 40,
-    paddingHorizontal: 12,
-    borderRadius: 14,
+  btnGhost: {
     backgroundColor: "rgba(255,255,255,0.08)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-    alignItems: "center",
-    justifyContent: "center",
-    alignSelf: "flex-start",
+    borderColor: "rgba(255,255,255,0.12)",
   },
-  smallBtnOn: { backgroundColor: "rgba(255,255,255,0.14)", borderColor: "rgba(255,255,255,0.20)" },
-  smallBtnText: { color: "white", fontWeight: "900" },
-
-  hint: { marginTop: 10, color: "rgba(255,255,255,0.45)", fontSize: 12, fontWeight: "700" },
-  hint2: { marginTop: 6, color: "rgba(255,255,255,0.55)", fontSize: 12, fontWeight: "700", lineHeight: 16 },
-
-  hr: { height: 1, backgroundColor: "rgba(255,255,255,0.10)", marginTop: 8 },
-
-  builderBox: {
-    marginTop: 6,
-    padding: 10,
-    borderRadius: 14,
-    backgroundColor: "rgba(0,0,0,0.18)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-  },
-
-  validationBar: {
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginBottom: 8,
-  },
-  validationGood: {
-    backgroundColor: "rgba(80, 200, 120, 0.10)",
-    borderColor: "rgba(80, 200, 120, 0.35)",
-  },
-  validationBad: {
-    backgroundColor: "rgba(255, 170, 60, 0.10)",
-    borderColor: "rgba(255, 170, 60, 0.35)",
-  },
-  validationText: { color: "white", fontWeight: "900" },
-
-  readOnlyValue: {
-    marginTop: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-    color: "white",
-    fontWeight: "900",
-  },
-
-  previewBox: {
-    marginTop: 6,
-    padding: 10,
-    borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,0.05)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-    gap: 6,
-  },
-  previewLine: {
-    color: "rgba(255,255,255,0.85)",
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-    fontSize: 12,
-    fontWeight: "700",
-  },
-
-  // derived preview styles
-  previewLabel: { color: "rgba(255,255,255,0.65)", fontWeight: "900", fontSize: 12 },
-  previewValue: { color: "rgba(255,255,255,0.88)", fontWeight: "800", lineHeight: 18 },
-  previewLine2: { color: "rgba(255,255,255,0.85)", fontWeight: "700", lineHeight: 18 },
-
-  nodeCard: {
-    marginTop: 12,
-    padding: 10,
-    borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.05)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-    gap: 6,
-  },
-  nodeTitle: { color: "white", fontWeight: "900" },
-
-  tinyBtn: {
-    height: 34,
-    paddingHorizontal: 10,
-    borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,0.08)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  tinyBtnText: { color: "white", fontWeight: "900", fontSize: 12 },
-
-  ynBox: { flexDirection: "row", gap: 12, marginTop: 8 },
-  ynLabel: { color: "rgba(255,255,255,0.75)", fontWeight: "900", marginTop: 6 },
-
-  selectBtn: {
-    marginTop: 6,
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    backgroundColor: "rgba(255,255,255,0.07)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  selectBtnText: { color: "white", fontWeight: "900", flex: 1, paddingRight: 10 },
-  selectChevron: { color: "rgba(255,255,255,0.65)", fontWeight: "900" },
+  btnTextGhost: { color: "white", fontWeight: "900", fontSize: 15 },
 
   // Modal
   modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.65)",
+    backgroundColor: "rgba(0,0,0,0.60)",
     alignItems: "center",
     justifyContent: "center",
     padding: 16,
@@ -1611,75 +1243,41 @@ const styles = StyleSheet.create({
     width: "100%",
     maxWidth: 520,
     borderRadius: 18,
-    backgroundColor: "#0E141B",
+    padding: 14,
+    backgroundColor: "#0B0F14",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.12)",
-    overflow: "hidden",
   },
-  modalHeader: {
-    padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(255,255,255,0.10)",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
-  },
-  modalTitle: { color: "white", fontWeight: "900", fontSize: 14, flex: 1 },
+  modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 10 },
+  modalTitle: { color: "white", fontWeight: "900", fontSize: 16 },
   modalClose: {
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    height: 34,
+    paddingHorizontal: 12,
     borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "rgba(255,255,255,0.10)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
+    borderColor: "rgba(255,255,255,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
   },
   modalCloseText: { color: "white", fontWeight: "900" },
 
   modalRow: {
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(255,255,255,0.08)",
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-  },
-  modalRowActive: { backgroundColor: "rgba(255,255,255,0.06)" },
-  modalRowLabel: { color: "white", fontWeight: "900" },
-  modalRowSub: { color: "rgba(255,255,255,0.55)", fontWeight: "700", marginTop: 3, fontSize: 12 },
-  modalCheck: { color: "white", fontWeight: "900", fontSize: 16 },
-
-  // Preview run
-  previewRunBody: { gap: 10 },
-  previewRunStep: { color: "rgba(255,255,255,0.75)", fontWeight: "900" },
-  previewRunTitle: { color: "white", fontSize: 18, fontWeight: "900" },
-  previewRunText: { color: "rgba(255,255,255,0.82)", fontWeight: "700", lineHeight: 18 },
-  previewRunHintBox: {
-    padding: 10,
-    borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,0.05)",
+    padding: 12,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.10)",
-    gap: 6,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    marginTop: 10,
   },
-  previewRunHint: { color: "rgba(255,255,255,0.85)", fontWeight: "800" },
-  previewRunBtns: { flexDirection: "row", gap: 10, marginTop: 6 },
-  previewRunBtn: {
-    flex: 1,
-    height: 54,
-    borderRadius: 16,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
+  modalRowActive: {
+    borderColor: "rgba(241,238,219,0.28)",
+    backgroundColor: "rgba(241,238,219,0.12)",
   },
-  previewRunBtnYes: {
-    backgroundColor: "rgba(80, 200, 120, 0.12)",
-    borderColor: "rgba(80, 200, 120, 0.35)",
-  },
-  previewRunBtnNo: {
-    backgroundColor: "rgba(255, 170, 60, 0.12)",
-    borderColor: "rgba(255, 170, 60, 0.35)",
-  },
-  previewRunBtnText: { color: "white", fontWeight: "900", fontSize: 16 },
+  modalRowLabel: { color: "white", fontWeight: "900" },
+  modalRowSub: { color: "rgba(255,255,255,0.65)", fontWeight: "700", marginTop: 4 },
+  modalCheck: { color: "white", fontWeight: "900", fontSize: 18 },
 });

@@ -15,16 +15,17 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import {
-  adminLiveChatHistory,
-  adminLiveChatSend,
-  adminDeleteLiveChatConversation,
-  getSavedAdminKey,
-  type LiveChatHistoryResponse,
-} from "../src/api";
+import { adminDeleteLiveChatConversation, getSavedAdminKey } from "../src/api";
 import { API_BASE_URL } from "../src/config";
 
-type Msg = LiveChatHistoryResponse["messages"][number];
+type Msg = {
+  id?: string;
+  conversation_id?: string;
+  sender_id?: string;
+  sender_role?: "customer" | "owner" | "system" | string;
+  body?: string;
+  created_at?: string;
+};
 
 type AiMsg = {
   role: "user" | "assistant";
@@ -146,8 +147,13 @@ export default function AdminChat() {
     async (key: string) => {
       if (!conversationId) return;
       try {
-        const hist = await adminLiveChatHistory(key, conversationId);
-        const msgs = Array.isArray(hist.messages) ? hist.messages : [];
+        const r = await fetch(`${API_BASE_URL}/v1/admin/livechat/history/${conversationId}`, {
+          headers: { "X-Admin-Key": key },
+        });
+        if (!r.ok) throw new Error(await r.text());
+
+        const hist = (await r.json()) as { messages?: Msg[] };
+        const msgs = Array.isArray(hist.messages) ? (hist.messages as Msg[]) : [];
         const sig = computeSig(msgs);
         if (sig !== lastSigRef.current) {
           lastSigRef.current = sig;
@@ -200,8 +206,6 @@ export default function AdminChat() {
     };
   }, [adminKey, conversationId, refresh]);
 
-
-
   async function confirmDeleteConversation() {
     if (!adminKey || !conversationId) return;
 
@@ -239,7 +243,12 @@ export default function AdminChat() {
     setError("");
     try {
       setText("");
-      await adminLiveChatSend(adminKey, conversationId, body);
+      const r = await fetch(`${API_BASE_URL}/v1/admin/livechat/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Admin-Key": adminKey },
+        body: JSON.stringify({ conversation_id: conversationId, body }),
+      });
+      if (!r.ok) throw new Error(await r.text());
       await refresh(adminKey);
     } catch (e: any) {
       setError(String(e?.message ?? "Failed to send."));
@@ -344,7 +353,6 @@ export default function AdminChat() {
           {!!customerId && <Text style={styles.meta}>Session: {customerId.slice(0, 8)}…</Text>}
           <Text style={styles.meta}>Conversation: {conversationId.slice(0, 8)}…</Text>
 
-
           <View style={styles.headerBtns}>
             <Pressable style={styles.smallBtn} onPress={() => router.back()}>
               <Text style={styles.smallBtnText}>Back</Text>
@@ -353,7 +361,6 @@ export default function AdminChat() {
               <Text style={styles.smallBtnText}>Delete chat</Text>
             </Pressable>
           </View>
-
 
           {!!customerId && (
             <Pressable
@@ -381,16 +388,23 @@ export default function AdminChat() {
           <FlatList
             ref={listRef}
             data={messages}
-            keyExtractor={(m) => m.id}
+            keyExtractor={(m, idx) =>
+              String(m.id || `${m.conversation_id || conversationId}-${m.created_at || ""}-${idx}`)
+            }
             contentContainerStyle={[styles.list, { paddingBottom: INPUT_BAR_EST_HEIGHT + 16 + safeBottom }]}
             ListHeaderComponent={customerId ? AiHeader : null}
+            ListEmptyComponent={
+              <View style={styles.emptyBox}>
+                <Text style={styles.emptyText}>No live chat messages yet.</Text>
+              </View>
+            }
             onContentSizeChange={() => scrollToBottom()}
             keyboardShouldPersistTaps="handled"
             renderItem={({ item }) => {
-              const mine = item.sender_role === "owner";
+              const mine = (item.sender_role || "") === "owner";
               return (
                 <View style={[styles.bubble, mine ? styles.mine : styles.theirs]}>
-                  <Text style={styles.msgText}>{item.body}</Text>
+                  <Text style={styles.msgText}>{item.body ?? ""}</Text>
                   <Text style={styles.timeText}>{fmt(item.created_at)}</Text>
                 </View>
               );
@@ -490,6 +504,9 @@ const styles = StyleSheet.create({
 
   list: { paddingHorizontal: 14, paddingVertical: 10, gap: 10, flexGrow: 1 },
 
+  emptyBox: { paddingTop: 18, alignItems: "center" },
+  emptyText: { color: "rgba(255,255,255,0.65)", fontWeight: "800" },
+
   bubble: {
     maxWidth: "86%",
     padding: 12,
@@ -526,8 +543,7 @@ const styles = StyleSheet.create({
   },
   aiToggleText: { color: "white", fontWeight: "900", fontSize: 12 },
 
-  aiMetaRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
-
+  aiMetaRow: { marginTop: 10, flexDirection: "row", flexWrap: "wrap", gap: 8 },
   pill: {
     paddingVertical: 6,
     paddingHorizontal: 10,
@@ -536,58 +552,56 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.12)",
     backgroundColor: "rgba(255,255,255,0.08)",
   },
-  pillGreen: {
-    backgroundColor: "rgba(34,197,94,0.15)",
-    borderColor: "rgba(34,197,94,0.25)",
-  },
-  pillGray: {
-    backgroundColor: "rgba(148,163,184,0.10)",
-    borderColor: "rgba(148,163,184,0.18)",
-  },
-  pillText: { color: "rgba(255,255,255,0.92)", fontWeight: "900", fontSize: 12 },
+  pillGreen: { backgroundColor: "rgba(34,197,94,0.16)", borderColor: "rgba(34,197,94,0.25)" },
+  pillGray: { backgroundColor: "rgba(255,255,255,0.08)", borderColor: "rgba(255,255,255,0.12)" },
+  pillText: { color: "white", fontWeight: "900", fontSize: 12 },
 
   aiNodeBox: {
     marginTop: 10,
     padding: 10,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
+    borderColor: "rgba(255,255,255,0.12)",
     backgroundColor: "rgba(255,255,255,0.06)",
   },
-  aiNodeLabel: { color: "rgba(255,255,255,0.70)", fontWeight: "900", fontSize: 12, marginBottom: 6 },
-  aiNodeText: { color: "white", fontSize: 14, lineHeight: 19, fontWeight: "700" },
+  aiNodeLabel: { color: "rgba(255,255,255,0.75)", fontWeight: "900", fontSize: 12 },
+  aiNodeText: { marginTop: 6, color: "white", fontWeight: "800", lineHeight: 20 },
 
-  aiSub: { color: "rgba(255,255,255,0.65)", marginTop: 8, fontWeight: "700" },
-  aiErr: { color: "rgba(239,68,68,0.95)", marginTop: 8, fontWeight: "900" },
+  aiSub: { marginTop: 10, color: "rgba(255,255,255,0.65)", fontWeight: "800" },
+  aiErr: { marginTop: 10, color: "rgba(239,68,68,0.95)", fontWeight: "900" },
 
   aiMsgs: { marginTop: 10, gap: 10 },
-  aiMsgRow: { gap: 6 },
-
-  aiMsgHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
-  aiRole: { color: "rgba(255,255,255,0.75)", fontWeight: "900", fontSize: 12 },
-  aiTime: { color: "rgba(255,255,255,0.45)", fontWeight: "800", fontSize: 11 },
-
-  aiText: { color: "white", fontSize: 14, lineHeight: 19 },
+  aiMsgRow: {
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    gap: 6,
+  },
+  aiMsgHeader: { flexDirection: "row", justifyContent: "space-between", gap: 10 },
+  aiRole: { color: "white", fontWeight: "900" },
+  aiTime: { color: "rgba(255,255,255,0.55)", fontWeight: "700", fontSize: 12 },
+  aiText: { color: "rgba(255,255,255,0.92)", lineHeight: 20 },
 
   inputWrap: {
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255,255,255,0.10)",
+    backgroundColor: "#0B0F14",
     flexDirection: "row",
     gap: 10,
-    padding: 12,
-    borderTopWidth: 1,
-    borderTopColor: "rgba(255,255,255,0.08)",
-    backgroundColor: "#0B0F14",
     alignItems: "flex-end",
   },
   input: {
     flex: 1,
-    color: "white",
     minHeight: 44,
     maxHeight: 130,
-    fontSize: 15,
-    lineHeight: 20,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
     borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: "white",
     backgroundColor: "rgba(255,255,255,0.06)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.10)",
@@ -596,10 +610,10 @@ const styles = StyleSheet.create({
     height: 44,
     paddingHorizontal: 16,
     borderRadius: 14,
-    backgroundColor: "white",
+    backgroundColor: "rgba(241,238,219,0.95)",
     alignItems: "center",
     justifyContent: "center",
   },
-  btnDisabled: { opacity: 0.4 },
-  btnText: { color: "#0B0F14", fontWeight: "900" },
+  btnDisabled: { opacity: 0.45 },
+  btnText: { color: "#043553", fontWeight: "900" },
 });

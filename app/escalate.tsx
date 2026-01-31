@@ -10,9 +10,10 @@ import {
   Platform,
   ScrollView,
   Keyboard,
+  Linking,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { createEscalation, getOrCreateSession } from "../src/api";
+import { createEscalation, getOrCreateSession, getSupportStatus } from "../src/api";
 
 const BRAND = {
   bg: "#071018",
@@ -57,10 +58,34 @@ export default function Escalate() {
   const [location, setLocation] = useState("");
   const [trigger, setTrigger] = useState("");
 
+  const [businessHours, setBusinessHours] = useState<boolean | null>(null);
+  const [nextOpen, setNextOpen] = useState<string>("");
+  const [supportEmail, setSupportEmail] = useState<string>("info@vinnies.net");
+
   const [sending, setSending] = useState(false);
 
   useEffect(() => {
     (async () => setSessionId(await getOrCreateSession()))();
+  }, []);
+
+  // Business-hours routing is decided on the server.
+  useEffect(() => {
+    (async () => {
+      try {
+        const s = await getSupportStatus();
+        setBusinessHours(!!s?.business_hours);
+        setNextOpen(s?.next_open ? String(s.next_open) : "");
+        setSupportEmail(s?.support_email ? String(s.support_email) : "info@vinnies.net");
+
+        // After hours: force email-only escalation.
+        if (s && s.business_hours === false) {
+          setPreferred("Email");
+        }
+      } catch {
+        // If status check fails, keep current UX (do not block escalation)
+        setBusinessHours(null);
+      }
+    })();
   }, []);
 
   const contactLabel = useMemo(() => {
@@ -104,7 +129,7 @@ export default function Escalate() {
 
     setSending(true);
     try {
-      await createEscalation({
+      const res: any = await createEscalation({
         session_id: sessionId,
         name: name.trim(),
         phone,
@@ -112,6 +137,31 @@ export default function Escalate() {
         message,
         preferred_contact: preferred,
       });
+
+      // If the backend returns a pre-filled email payload, open the user's mail app.
+      const routing = String(res?.routing || "").toLowerCase();
+      const to = String(res?.email_to || supportEmail || "info@vinnies.net").trim();
+      const subject = String(res?.email_subject || "").trim();
+      const body = String(res?.email_body || "").trim();
+
+      const shouldOpenEmail =
+        routing === "email" ||
+        (!businessHours && businessHours !== null) ||
+        preferred === "Email";
+
+      if (shouldOpenEmail && to && (subject || body)) {
+        const url = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(
+          body
+        )}`;
+        try {
+          const can = await Linking.canOpenURL(url);
+          if (can) {
+            await Linking.openURL(url);
+          }
+        } catch {
+          // If mail app can't open, still show success and keep escalation stored server-side.
+        }
+      }
 
       router.replace("/success");
     } catch (e: any) {
@@ -131,8 +181,12 @@ export default function Escalate() {
           <View style={styles.header}>
             <Text style={styles.title}>Request help from Vinnies</Text>
             <Text style={styles.note}>
-              This sends your request to <Text style={{ fontWeight: "900", color: BRAND.cream }}>info@vinnies.net</Text>.
+              {businessHours === false
+                ? "After hours: we’ll prep an email for you to send so we can follow up next business day. "
+                : "We’ll capture your details so support can follow up. "}
+              <Text style={{ fontWeight: "900", color: BRAND.cream }}>{supportEmail}</Text>
               {!!year ? ` (Airstream year: ${year})` : ""}
+              {!!nextOpen && businessHours === false ? `  Next open: ${new Date(nextOpen).toLocaleString()}` : ""}
             </Text>
           </View>
 
@@ -190,16 +244,21 @@ export default function Escalate() {
             <View style={styles.segment}>
               {(["Email", "Text", "Call"] as Preferred[]).map((opt) => {
                 const active = preferred === opt;
+                const afterHours = businessHours === false;
+                const disabled = afterHours && opt !== "Email";
                 return (
                   <Pressable
                     key={opt}
                     onPress={() => {
+                      if (disabled) return;
                       setPreferred(opt);
                       setContact(""); // clear so they enter the right kind
                     }}
+                    disabled={disabled}
                     style={({ pressed }) => [
                       styles.segmentBtn,
                       active && styles.segmentBtnActive,
+                      disabled && { opacity: 0.45 },
                       pressed && { opacity: 0.92 },
                     ]}
                   >
@@ -208,6 +267,12 @@ export default function Escalate() {
                 );
               })}
             </View>
+
+            {businessHours === false && (
+              <Text style={styles.afterHoursNote}>
+                After hours: Email is required. We’ll pre-fill a message with your AI troubleshooting history.
+              </Text>
+            )}
 
             <Text style={styles.label}>{contactLabel}</Text>
             <TextInput
@@ -309,6 +374,8 @@ const styles = StyleSheet.create({
   segmentTextActive: { color: BRAND.cream },
 
   validation: { color: "rgba(239,68,68,0.95)", fontWeight: "900", marginTop: 2 },
+
+  afterHoursNote: { color: BRAND.muted, marginTop: 8, lineHeight: 16, fontSize: 12, fontWeight: "700" },
 
   submit: {
     height: 52,

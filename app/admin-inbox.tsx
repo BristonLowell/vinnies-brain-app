@@ -22,11 +22,14 @@ import {
   adminDeleteLiveChatConversation,
   adminListAllSessions,
   adminDeleteSession,
+  adminListEscalations,
+  adminUpdateEscalationStatus,
   clearAdminKey,
   getSavedAdminKey,
   saveAdminKey,
   type AdminConversationItem,
   type AdminSessionItem,
+  type AdminEscalationItem,
 } from "../src/api";
 import { API_BASE_URL } from "../src/config";
 
@@ -94,7 +97,7 @@ async function registerForPushAndSendToBackend(ownerId: string) {
   });
 }
 
-type Tab = "live" | "ai";
+type Tab = "live" | "ai" | "esc";
 
 function SkeletonRow() {
   return (
@@ -123,6 +126,7 @@ export default function AdminInbox() {
 
   const [liveItems, setLiveItems] = useState<AdminConversationItem[]>([]);
   const [aiItems, setAiItems] = useState<AdminSessionItem[]>([]);
+  const [escItems, setEscItems] = useState<AdminEscalationItem[]>([]);
 
   const [query, setQuery] = useState("");
 
@@ -143,10 +147,14 @@ export default function AdminInbox() {
           const res = await adminLiveChatConversations(adminKey.trim());
           if (!mounted.current) return;
           setLiveItems(res.conversations || []);
-        } else {
+        } else if (tab === "ai") {
           const res = await adminListAllSessions(adminKey.trim());
           if (!mounted.current) return;
           setAiItems(res.sessions || []);
+        } else {
+          const res = await adminListEscalations(adminKey.trim());
+          if (!mounted.current) return;
+          setEscItems(res.escalations || []);
         }
       } catch (e: any) {
         if (!mounted.current) return;
@@ -263,11 +271,7 @@ export default function AdminInbox() {
       const last = x.last_message?.body || "";
       const cid = x.conversation_id || "";
       const cust = x.customer_id || "";
-      return (
-        cid.toLowerCase().includes(q) ||
-        cust.toLowerCase().includes(q) ||
-        last.toLowerCase().includes(q)
-      );
+      return cid.toLowerCase().includes(q) || cust.toLowerCase().includes(q) || last.toLowerCase().includes(q);
     });
   }, [liveItems, query]);
 
@@ -279,14 +283,23 @@ export default function AdminInbox() {
       const prev = x.preview || "";
       const yr = typeof x.airstream_year === "number" ? String(x.airstream_year) : "";
       const cat = x.category ? String(x.category) : "";
-      return (
-        sid.toLowerCase().includes(q) ||
-        prev.toLowerCase().includes(q) ||
-        yr.toLowerCase().includes(q) ||
-        cat.toLowerCase().includes(q)
-      );
+      return sid.toLowerCase().includes(q) || prev.toLowerCase().includes(q) || yr.toLowerCase().includes(q) || cat.toLowerCase().includes(q);
     });
   }, [aiItems, query]);
+
+  const filteredEsc = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return escItems;
+    return escItems.filter((x) => {
+      const id = (x.id || "").toLowerCase();
+      const sid = (x.session_id || "").toLowerCase();
+      const name = (x.name || "").toLowerCase();
+      const email = (x.email || "").toLowerCase();
+      const phone = (x.phone || "").toLowerCase();
+      const msg = (x.message_preview || x.message || "").toLowerCase();
+      return id.includes(q) || sid.includes(q) || name.includes(q) || email.includes(q) || phone.includes(q) || msg.includes(q);
+    });
+  }, [escItems, query]);
 
   const LiveRow = ({ item }: { item: AdminConversationItem }) => {
     const last = item.last_message;
@@ -328,10 +341,7 @@ export default function AdminInbox() {
   };
 
   const AiRow = ({ item }: { item: AdminSessionItem }) => {
-    const metaBits = [
-      typeof item.airstream_year === "number" ? String(item.airstream_year) : "",
-      item.category ? String(item.category) : "",
-    ].filter(Boolean);
+    const metaBits = [typeof item.airstream_year === "number" ? String(item.airstream_year) : "", item.category ? String(item.category) : ""].filter(Boolean);
 
     return (
       <Pressable
@@ -370,14 +380,115 @@ export default function AdminInbox() {
     );
   };
 
-  const showList = hasKey && !loading;
+  async function setEscStatus(escalationId: string, status: "open" | "in_progress" | "closed") {
+    try {
+      await adminUpdateEscalationStatus(adminKey.trim(), escalationId, status);
+      await load(true);
+    } catch (e: any) {
+      setError(String(e?.message ?? "Update failed."));
+    }
+  }
+
+  const EscRow = ({ item }: { item: AdminEscalationItem }) => {
+    const status = (item.status || "open").toString();
+    const preview = item.message_preview || item.message || "";
+    const sid = item.session_id || "";
+    const canOpenChat = !!item.conversation_id;
+
+    return (
+      <Pressable
+        onPress={() =>
+          router.push(
+            canOpenChat
+              ? {
+                  pathname: "/admin-chat",
+                  params: {
+                    conversation_id: String(item.conversation_id),
+                    customer_id: sid,
+                  },
+                }
+              : {
+                  pathname: "/admin-session",
+                  params: { session_id: sid },
+                }
+          )
+        }
+        style={({ pressed }) => [styles.row, pressed && { opacity: 0.92 }]}
+      >
+        <View style={{ flex: 1, gap: 6 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <Text style={styles.rowTitle}>Escalation: {item.id?.slice(0, 8)}…</Text>
+            <View
+              style={[
+                styles.statusPill,
+                status === "closed" && styles.statusPillClosed,
+                status === "in_progress" && styles.statusPillProgress,
+              ]}
+            >
+              <Text style={styles.statusPillText}>{status.replace(/_/g, " ")}</Text>
+            </View>
+          </View>
+
+          <Text style={styles.rowMeta} numberOfLines={1}>
+            Session: {sid.slice(0, 8)}…
+            {item.business_hours ? " • business hours" : " • after hours"}
+            {item.routing ? ` • ${item.routing}` : ""}
+          </Text>
+
+          {!!item.name && <Text style={styles.rowMeta}>Name: {item.name}</Text>}
+          {!!(item.email || item.phone) && (
+            <Text style={styles.rowMeta} numberOfLines={1}>
+              {item.email ? `Email: ${item.email}` : ""}
+              {item.email && item.phone ? " • " : ""}
+              {item.phone ? `Phone: ${item.phone}` : ""}
+            </Text>
+          )}
+
+          {!!preview && (
+            <Text style={styles.rowSub} numberOfLines={2}>
+              {preview}
+            </Text>
+          )}
+
+          {!!item.created_at && <Text style={styles.rowMeta}>{fmt(item.created_at)}</Text>}
+        </View>
+
+        <View style={{ gap: 8, alignItems: "flex-end" }}>
+          {status !== "in_progress" && status !== "closed" && (
+            <Pressable
+              onPress={() => setEscStatus(String(item.id), "in_progress")}
+              style={({ pressed }) => [styles.pillBtn, pressed && { opacity: 0.88 }]}
+              hitSlop={10}
+            >
+              <Text style={styles.pillBtnText}>In progress</Text>
+            </Pressable>
+          )}
+          {status !== "closed" && (
+            <Pressable
+              onPress={() => setEscStatus(String(item.id), "closed")}
+              style={({ pressed }) => [styles.pillBtn, styles.pillBtnClose, pressed && { opacity: 0.88 }]}
+              hitSlop={10}
+            >
+              <Text style={[styles.pillBtnText, { color: "white" }]}>Close</Text>
+            </Pressable>
+          )}
+        </View>
+
+        <Text style={styles.chev}>›</Text>
+      </Pressable>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <View style={styles.header}>
         <Text style={styles.title}>Admin Inbox</Text>
         <Text style={styles.sub}>
-          {tab === "live" ? "Live chat conversations." : "All troubleshooting chats (QC)."}
+          {tab === "live"
+            ? "Live chat conversations."
+            : tab === "ai"
+              ? "All troubleshooting chats (QC)."
+              : "Escalation requests (email / after-hours / handoffs)."}
         </Text>
       </View>
 
@@ -423,6 +534,12 @@ export default function AdminInbox() {
               >
                 <Text style={[styles.tabText, tab === "ai" && styles.tabTextActive]}>All AI Chats</Text>
               </Pressable>
+              <Pressable
+                onPress={() => setTab("esc")}
+                style={({ pressed }) => [styles.tab, tab === "esc" && styles.tabActive, pressed && { opacity: 0.92 }]}
+              >
+                <Text style={[styles.tabText, tab === "esc" && styles.tabTextActive]}>Escalations</Text>
+              </Pressable>
             </View>
 
             <View style={{ flexDirection: "row", gap: 10 }}>
@@ -439,7 +556,7 @@ export default function AdminInbox() {
             <TextInput
               value={query}
               onChangeText={setQuery}
-              placeholder={tab === "live" ? "Search live chats…" : "Search AI sessions…"}
+              placeholder={tab === "live" ? "Search live chats…" : tab === "ai" ? "Search AI sessions…" : "Search escalations…"}
               placeholderTextColor="rgba(255,255,255,0.35)"
               style={styles.search}
               autoCapitalize="none"
@@ -474,14 +591,12 @@ export default function AdminInbox() {
                 <View style={styles.empty}>
                   <Text style={styles.emptyTitle}>{query.trim() ? "No matches" : "No conversations yet"}</Text>
                   <Text style={styles.emptySub}>
-                    {query.trim()
-                      ? "Try a different search."
-                      : "When customers message you, they’ll show up here."}
+                    {query.trim() ? "Try a different search." : "When customers message you, they’ll show up here."}
                   </Text>
                 </View>
               }
             />
-          ) : (
+          ) : tab === "ai" ? (
             <FlatList
               data={filteredAi}
               keyExtractor={(x) => x.session_id}
@@ -492,9 +607,23 @@ export default function AdminInbox() {
                 <View style={styles.empty}>
                   <Text style={styles.emptyTitle}>{query.trim() ? "No matches" : "No sessions found"}</Text>
                   <Text style={styles.emptySub}>
-                    {query.trim()
-                      ? "Try a different search."
-                      : "This list shows all troubleshooting chats for QC."}
+                    {query.trim() ? "Try a different search." : "This list shows all troubleshooting chats for QC."}
+                  </Text>
+                </View>
+              }
+            />
+          ) : (
+            <FlatList
+              data={filteredEsc}
+              keyExtractor={(x) => x.id}
+              contentContainerStyle={styles.list}
+              renderItem={({ item }) => <EscRow item={item} />}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} />}
+              ListEmptyComponent={
+                <View style={styles.empty}>
+                  <Text style={styles.emptyTitle}>{query.trim() ? "No matches" : "No escalations yet"}</Text>
+                  <Text style={styles.emptySub}>
+                    {query.trim() ? "Try a different search." : "When customers request help, they’ll show up here."}
                   </Text>
                 </View>
               }
@@ -635,6 +764,40 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   deleteText: { color: "white", fontWeight: "900", fontSize: 12 },
+
+  statusPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderWidth: 1,
+    borderColor: BRAND.border,
+  },
+  statusPillProgress: {
+    backgroundColor: "rgba(241,238,219,0.10)",
+    borderColor: "rgba(241,238,219,0.22)",
+  },
+  statusPillClosed: {
+    backgroundColor: "rgba(34,197,94,0.10)",
+    borderColor: "rgba(34,197,94,0.22)",
+  },
+  statusPillText: { color: "white", fontWeight: "900", fontSize: 11 },
+
+  pillBtn: {
+    height: 32,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: "rgba(241,238,219,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(241,238,219,0.22)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pillBtnClose: {
+    backgroundColor: "rgba(239,68,68,0.16)",
+    borderColor: "rgba(239,68,68,0.28)",
+  },
+  pillBtnText: { color: BRAND.cream, fontWeight: "900", fontSize: 12 },
 
   chev: { color: "rgba(255,255,255,0.55)", fontSize: 26, fontWeight: "900" },
 

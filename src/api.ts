@@ -308,3 +308,61 @@ export async function adminDeleteSession(adminKey: string, sessionId: string) {
   });
 }
 
+export type SupportStatusResponse = {
+  business_hours: boolean;
+  timezone: string;
+  open_hour: number;
+  close_hour: number;
+  next_open?: string | null;
+  support_email: string;
+};
+
+export async function getSupportStatus() {
+  return await http<SupportStatusResponse>("/v1/support/status");
+}
+
+export type SessionHistoryResponse = {
+  session_id: string;
+  messages: { role: string; text: string; created_at?: string | null }[];
+};
+
+export async function getSessionHistory(sessionId: string) {
+  return await http<SessionHistoryResponse>(`/v1/sessions/${sessionId}/history`);
+}
+
+export type AdminEscalationItem = {
+  id: string;
+  session_id: string;
+  name?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  message?: string | null;
+  message_preview?: string | null;
+  preferred_contact?: string | null;
+  status?: "open" | "in_progress" | "closed" | string;
+  routing?: "chat" | "email" | "both" | string;
+  business_hours?: boolean;
+  conversation_id?: string | null;
+  created_at?: string;
+  handled_at?: string | null;
+};
+
+export async function adminListEscalations(adminKey: string, opts?: { status?: string }) {
+  const q = (opts?.status || "").trim();
+  const path = q ? `/v1/admin/escalations?status=${encodeURIComponent(q)}` : "/v1/admin/escalations";
+  return await http<{ escalations: AdminEscalationItem[] }>(path, {
+    headers: { "X-Admin-Key": adminKey },
+  });
+}
+
+export async function adminUpdateEscalationStatus(
+  adminKey: string,
+  escalationId: string,
+  status: "open" | "in_progress" | "closed" | string
+) {
+  return await http<{ ok: boolean }>(`/v1/admin/escalations/${escalationId}`, {
+    body: { status },
+    headers: { "X-Admin-Key": adminKey },
+  });
+}
+

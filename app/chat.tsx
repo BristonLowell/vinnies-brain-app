@@ -16,12 +16,7 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import {
-  getOrCreateSession,
-  sendChat,
-  getSupportStatus,
-  createEscalation,
-} from "../src/api";
+import { getOrCreateSession, sendChat, getSupportStatus } from "../src/api";
 
 const BRAND = {
   bg: "#071018",
@@ -31,6 +26,14 @@ const BRAND = {
   cream: "#F1EEDB",
   text: "rgba(255,255,255,0.92)",
   muted: "rgba(255,255,255,0.70)",
+  faint: "rgba(255,255,255,0.45)",
+};
+
+type CheckpointSummary = {
+  known?: string[];
+  ruled_out?: string[];
+  likely_causes?: string[];
+  next_checks?: string[];
 };
 
 type ChatItem = {
@@ -40,6 +43,7 @@ type ChatItem = {
     usedArticles?: { id: string; title: string }[];
     showEscalation?: boolean;
     clarifyingQuestion?: string;
+    checkpointSummary?: CheckpointSummary;
   };
 };
 
@@ -64,6 +68,68 @@ function fmtLocal(ts?: string) {
   return d.toLocaleString();
 }
 
+function renderCheckpointSummary(summary?: CheckpointSummary) {
+  if (!summary) return null;
+
+  const hasAny =
+    (summary.known && summary.known.length > 0) ||
+    (summary.ruled_out && summary.ruled_out.length > 0) ||
+    (summary.likely_causes && summary.likely_causes.length > 0) ||
+    (summary.next_checks && summary.next_checks.length > 0);
+
+  if (!hasAny) return null;
+
+  return (
+    <View style={styles.checkpointCard}>
+      <Text style={styles.checkpointTitle}>What we know so far</Text>
+
+      {!!summary.known?.length && (
+        <View style={styles.checkpointSection}>
+          <Text style={styles.checkpointLabel}>Confirmed</Text>
+          {summary.known.map((s, i) => (
+            <Text key={`k_${i}`} style={styles.checkpointItem}>
+              • {s}
+            </Text>
+          ))}
+        </View>
+      )}
+
+      {!!summary.ruled_out?.length && (
+        <View style={styles.checkpointSection}>
+          <Text style={styles.checkpointLabel}>Ruled out</Text>
+          {summary.ruled_out.map((s, i) => (
+            <Text key={`r_${i}`} style={styles.checkpointItem}>
+              • {s}
+            </Text>
+          ))}
+        </View>
+      )}
+
+      {!!summary.likely_causes?.length && (
+        <View style={styles.checkpointSection}>
+          <Text style={styles.checkpointLabel}>Likely causes</Text>
+          {summary.likely_causes.map((s, i) => (
+            <Text key={`c_${i}`} style={styles.checkpointItem}>
+              • {s}
+            </Text>
+          ))}
+        </View>
+      )}
+
+      {!!summary.next_checks?.length && (
+        <View style={styles.checkpointSection}>
+          <Text style={styles.checkpointLabel}>Next checks</Text>
+          {summary.next_checks.map((s, i) => (
+            <Text key={`n_${i}`} style={styles.checkpointItem}>
+              • {s}
+            </Text>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
+
 export default function Chat() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -80,7 +146,7 @@ export default function Chat() {
   const [sending, setSending] = useState(false);
   const [showEscalate, setShowEscalate] = useState(false);
 
-  // Server-decided business-hours (PT) so iOS/Android match.
+  // Server-decided business-hours so iOS/Android match.
   const [businessHours, setBusinessHours] = useState<boolean | null>(null);
   const [nextOpen, setNextOpen] = useState<string>("");
 
@@ -119,7 +185,6 @@ export default function Chat() {
         setBusinessHours(!!s?.business_hours);
         setNextOpen(s?.next_open ? String(s.next_open) : "");
       } catch {
-        // If status fails, default to "not sure" and show email path (safer than showing live chat after hours).
         if (cancelled) return;
         setBusinessHours(null);
         setNextOpen("");
@@ -136,7 +201,7 @@ export default function Chat() {
 
     (async () => {
       try {
-        const sid = await getOrCreateSession(); // ✅ reuse the current active session
+        const sid = await getOrCreateSession(); // ✅ reuse current active session
         if (cancelled) return;
 
         setSessionId(sid);
@@ -179,18 +244,19 @@ export default function Chat() {
     })();
   }, [ITEMS_KEY, items]);
 
-  const progress = useMemo(() => {
-    const last = [...items]
-      .reverse()
-      .find((x) => x.role === "assistant" && x.meta?.clarifyingQuestion?.trim());
-    const q = last?.meta?.clarifyingQuestion?.trim();
-    if (!q) return null;
-    return q;
-  }, [items]);
-
   const canSend = useMemo(() => {
     return !sending && text.trim().length > 0 && !!sessionId;
   }, [sending, text, sessionId]);
+
+  // ✅ Gate escalation CTAs until the user has gone through a few steps
+  const userTurns = useMemo(() => items.filter((x) => x.role === "user").length, [items]);
+  const assistantTurns = useMemo(() => {
+    const total = items.filter((x) => x.role === "assistant").length;
+    // Don't count the initial “What’s going on…” as a “step”
+    return Math.max(0, total - 1);
+  }, [items]);
+
+  const escalationEligibleBySteps = userTurns >= 2 && assistantTurns >= 2;
 
   async function sendAndAppend(message: string) {
     const sid = sessionId;
@@ -198,22 +264,29 @@ export default function Chat() {
 
     const res = await sendChat(sid, message, year);
 
-    const usedArticles = res.used_articles || [];
+    const usedArticles = (res as any).used_articles || [];
     const clarifyingQuestion =
-      Array.isArray(res.clarifying_questions) && res.clarifying_questions.length > 0
-        ? res.clarifying_questions[0]
+      Array.isArray((res as any).clarifying_questions) && (res as any).clarifying_questions.length > 0
+        ? (res as any).clarifying_questions[0]
         : "";
+
+    const checkpointSummary = (res as any).checkpoint_summary as CheckpointSummary | undefined;
 
     setItems((prev) => [
       ...prev,
       {
         role: "assistant",
-        text: res.answer,
-        meta: { usedArticles, showEscalation: !!res.show_escalation, clarifyingQuestion },
+        text: (res as any).answer,
+        meta: {
+          usedArticles,
+          showEscalation: !!(res as any).show_escalation,
+          clarifyingQuestion,
+          checkpointSummary,
+        },
       },
     ]);
 
-    setShowEscalate(!!res.show_escalation);
+    setShowEscalate(!!(res as any).show_escalation);
   }
 
   async function onSend() {
@@ -243,41 +316,20 @@ export default function Chat() {
     }
   }
 
-  async function logEscalationClick(mode: "livechat" | "email") {
-    // Option B: backend upserts escalation using unique(session_id)
-    // so this won't create duplicates if the user later fills the escalation form.
-    try {
-      await createEscalation({
-        session_id: sessionId,
-        name: "",
-        phone: "",
-        email: "",
-        preferred_contact: mode === "email" ? "Email" : "Chat",
-        message:
-          mode === "email"
-            ? "User confirmed escalation via Email Vinnies CTA"
-            : "User confirmed escalation via Chat with Vinnies CTA",
-        reset_old: false,
-      });
-    } catch {
-      // Don't block routing if logging fails.
-    }
-  }
-
   function confirmEscalation(mode: "livechat" | "email") {
     const isEmail = mode === "email";
+
     Alert.alert(
       isEmail ? "Email Vinnies?" : "Chat with Vinnies now?",
       isEmail
-        ? "We’ll save your chat and take you to the email escalation screen."
-        : "We’ll save your chat and connect you to live support.",
+        ? "We’ll take you to the email screen. When you submit, we’ll attach your current chat for the team."
+        : "We’ll connect you to live support.",
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Confirm",
           style: "default",
-          onPress: async () => {
-            await logEscalationClick(mode);
+          onPress: () => {
             if (isEmail) {
               router.push({
                 pathname: "/escalate",
@@ -292,8 +344,8 @@ export default function Chat() {
     );
   }
 
-  const showLiveChatCTA = showEscalate && businessHours === true;
-  const showEmailCTA = showEscalate && businessHours !== true;
+  const showLiveChatCTA = showEscalate && escalationEligibleBySteps && businessHours === true;
+  const showEmailCTA = showEscalate && escalationEligibleBySteps && businessHours !== true;
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
@@ -336,6 +388,7 @@ export default function Chat() {
                 <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
                   {!isUser && !!cq && <Text style={styles.clarifyingQuestion}>{cq}</Text>}
                   <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>{body}</Text>
+                  {!isUser && renderCheckpointSummary(item.meta?.checkpointSummary)}
                 </View>
               </View>
             );
@@ -373,8 +426,8 @@ export default function Chat() {
             <Text style={styles.escalateText}>Email Vinnies</Text>
             <Text style={styles.escalateSub}>
               {businessHours === false
-                ? `After hours — we’ll pre-fill an email for you.${nextOpen ? ` Next open: ${fmtLocal(nextOpen)}` : ""}`
-                : "We’ll pre-fill an email with your troubleshooting history."}
+                ? `After hours — we’ll attach your chat when you submit.${nextOpen ? ` Next open: ${fmtLocal(nextOpen)}` : ""}`
+                : "We’ll attach your troubleshooting history when you submit."}
             </Text>
           </Pressable>
         )}
@@ -392,7 +445,7 @@ export default function Chat() {
               value={text}
               onChangeText={setText}
               placeholder="Type your message…"
-              placeholderTextColor="rgba(255,255,255,0.45)"
+              placeholderTextColor={BRAND.faint}
               style={styles.input}
               multiline
               editable={!sending}
@@ -452,6 +505,19 @@ const styles = StyleSheet.create({
 
   typingBubble: { flexDirection: "row", alignItems: "center", gap: 8 },
   typingText: { color: BRAND.muted, fontWeight: "800" },
+
+  checkpointCard: {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+  },
+  checkpointTitle: { color: BRAND.cream, fontWeight: "900", fontSize: 13, marginBottom: 2 },
+  checkpointSection: { marginTop: 6 },
+  checkpointLabel: { color: BRAND.muted, fontWeight: "900", fontSize: 12, marginBottom: 2 },
+  checkpointItem: { color: BRAND.text, fontSize: 12, lineHeight: 16 },
 
   escalate: {
     marginHorizontal: 14,

@@ -119,12 +119,14 @@ export default function Welcome() {
 
       <View style={styles.container}>
         <View style={styles.brandWrap}>
-          <View style={styles.logoCard}>
+          <View style={styles.logoWrap}>
             <Image source={{ uri: VINNIES_LOGO_URI }} style={styles.logo} resizeMode="contain" />
           </View>
 
-          <Text style={styles.title}>Vinnie’s Brain</Text>
-          <Text style={styles.subtitle}>{subtitle}</Text>
+          <View style={styles.brandText}>
+            <Text style={styles.title}>Vinnie’s Brain</Text>
+            <Text style={styles.subtitle}>{subtitle}</Text>
+          </View>
         </View>
 
         <View style={styles.card}>
@@ -137,7 +139,17 @@ export default function Welcome() {
               !ready && { opacity: 0.45 },
             ]}
             disabled={!ready}
-            onPress={() => router.push({ pathname: "/year", params: { new: "1" } })}
+            onPress={async () => {
+              // iOS: require pro subscription
+              // Android: show paywall message until Play subscription exists
+              const { hasProEntitlement } = await import("../src/billing");
+              const ok = await hasProEntitlement();
+              if (ok) {
+                router.push({ pathname: "/year", params: { new: "1" } });
+              } else {
+                router.push({ pathname: "/paywall", params: { redirect: "/year" } });
+              }
+            }}
           >
             <View style={styles.primaryBtnInner}>
               {!ready ? (
@@ -161,15 +173,10 @@ export default function Welcome() {
       <Modal visible={adminModalOpen} transparent animationType="fade" onRequestClose={() => setAdminModalOpen(false)}>
         <Pressable style={styles.modalBackdrop} onPress={() => setAdminModalOpen(false)} />
 
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-          style={styles.modalCenter}
-        >
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.modalCenter}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Enter Admin Key</Text>
-            <Text style={styles.modalSub}>
-              This is the only place you’ll be asked for it.
-            </Text>
+            <Text style={styles.modalSub}>This is the only place you’ll be asked for it.</Text>
 
             <TextInput
               value={adminKeyInput}
@@ -271,19 +278,20 @@ const styles = StyleSheet.create({
     gap: 16,
   },
 
-  brandWrap: { alignItems: "center", gap: 10, marginBottom: 6 },
-  logoCard: {
+  // ✅ stretch so logo can be full width of the same content area
+  brandWrap: { gap: 10, marginBottom: 6, alignItems: "stretch" },
+  brandText: { alignItems: "center", gap: 6 },
+
+  // ✅ no background box; takes full available width
+  logoWrap: {
     height: 110,
-    width: 280,
-    borderRadius: 18,
-    backgroundColor: BRAND.surface,
-    borderWidth: 1,
-    borderColor: BRAND.border,
+    width: "100%",
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 14,
+    paddingHorizontal: 0,
   },
-  logo: { width: 240, height: 70 },
+  // Full-width logo (no background box)
+  logo: { width: "100%", height: 90 },
 
   title: { color: "white", fontSize: 34, fontWeight: "900", letterSpacing: -0.3 },
   subtitle: { color: BRAND.muted, fontSize: 14, textAlign: "center" },

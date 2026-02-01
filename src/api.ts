@@ -1,10 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { API_BASE_URL } from "./config";
-import type {
-  CreateSessionResponse,
-  ChatResponse,
-  EscalationResponse,
-} from "./types";
+import type { CreateSessionResponse, ChatResponse, EscalationResponse } from "./types";
 
 const SESSION_KEY = "vinniesbrain_session_id";
 const ADMIN_KEY = "vinniesbrain_admin_key";
@@ -42,7 +38,7 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 // ✅ iOS reliability: timeout + retry
 async function http<T>(
   path: string,
-  opts?: { body?: any; headers?: Record<string, string>; method?: string },
+  opts?: { body?: any; headers?: Record<string, string>; method?: string }
 ): Promise<T> {
   const url = `${API_BASE_URL}${path}`;
   const method = opts?.method ?? (opts?.body ? "POST" : "GET");
@@ -174,13 +170,10 @@ export async function clearSavedSessionId() {
 
 export async function setContext(
   sessionId: string,
-  ctx: { airstream_year?: number; category?: string },
+  ctx: { airstream_year?: number; category?: string }
 ) {
   const body: any = {};
-  if (
-    typeof ctx.airstream_year === "number" &&
-    Number.isFinite(ctx.airstream_year)
-  ) {
+  if (typeof ctx.airstream_year === "number" && Number.isFinite(ctx.airstream_year)) {
     body.airstream_year = ctx.airstream_year;
   }
   if (typeof ctx.category === "string" && ctx.category.trim().length > 0) {
@@ -191,11 +184,7 @@ export async function setContext(
   });
 }
 
-export async function sendChat(
-  sessionId: string,
-  message: string,
-  airstreamYear?: number,
-) {
+export async function sendChat(sessionId: string, message: string, airstreamYear?: number) {
   const body: any = { session_id: sessionId, message };
   if (typeof airstreamYear === "number" && Number.isFinite(airstreamYear)) {
     body.airstream_year = airstreamYear;
@@ -203,16 +192,34 @@ export async function sendChat(
   return await http<ChatResponse>("/v1/chat", { body });
 }
 
-export async function createEscalation(payload: {
+// ✅ OPTION A: phone is now optional for escalations
+export type CreateEscalationPayload = {
   session_id: string;
   name: string;
-  phone: string;
   email: string;
   message: string;
+  /** Optional: legacy field, no longer required by the UI */
+  phone?: string;
   preferred_contact?: string;
   reset_old?: boolean;
-}) {
-  return await http<EscalationResponse>("/v1/escalations", { body: payload });
+};
+
+export async function createEscalation(payload: CreateEscalationPayload) {
+  // Build the body so we don't send optional fields unless present
+  const body: any = {
+    session_id: payload.session_id,
+    name: payload.name,
+    email: payload.email,
+    message: payload.message,
+  };
+
+  if (payload.phone && payload.phone.trim().length > 0) {
+    body.phone = payload.phone.trim();
+  }
+  if (payload.preferred_contact) body.preferred_contact = payload.preferred_contact;
+  if (typeof payload.reset_old === "boolean") body.reset_old = payload.reset_old;
+
+  return await http<EscalationResponse>("/v1/escalations", { body });
 }
 
 // ----------------------------
@@ -259,15 +266,10 @@ export async function liveChatSend(sessionId: string, body: string) {
 }
 
 export async function liveChatHistory(sessionId: string) {
-  return await http<LiveChatHistoryResponse>(
-    `/v1/livechat/history/${sessionId}`,
-  );
+  return await http<LiveChatHistoryResponse>(`/v1/livechat/history/${sessionId}`);
 }
 
-export async function registerOwnerPushToken(
-  ownerId: string,
-  expoPushToken: string,
-) {
+export async function registerOwnerPushToken(ownerId: string, expoPushToken: string) {
   return await http<{ ok: boolean }>("/v1/owner/push-token", {
     body: { owner_id: ownerId, expo_push_token: expoPushToken },
   });
@@ -278,11 +280,7 @@ export async function registerOwnerPushToken(
 // ----------------------------
 
 export async function getSavedAdminKey() {
-  return (
-    (await AsyncStorage.getItem(ADMIN_KEY)) ||
-    (await AsyncStorage.getItem(ADMIN_KEY_LEGACY)) ||
-    ""
-  );
+  return (await AsyncStorage.getItem(ADMIN_KEY)) || (await AsyncStorage.getItem(ADMIN_KEY_LEGACY)) || "";
 }
 
 export async function saveAdminKey(key: string) {
@@ -311,23 +309,16 @@ export type AdminConversationItem = {
 };
 
 export async function adminLiveChatConversations(adminKey: string) {
-  return await http<{ conversations: AdminConversationItem[] }>(
-    "/v1/admin/livechat/conversations",
-    { headers: { "X-Admin-Key": adminKey } },
-  );
+  return await http<{ conversations: AdminConversationItem[] }>("/v1/admin/livechat/conversations", {
+    headers: { "X-Admin-Key": adminKey },
+  });
 }
 
-export async function adminDeleteLiveChatConversation(
-  adminKey: string,
-  conversationId: string,
-) {
-  return await http<{ ok: boolean }>(
-    `/v1/admin/livechat/conversations/${conversationId}`,
-    {
-      method: "DELETE",
-      headers: { "X-Admin-Key": adminKey },
-    },
-  );
+export async function adminDeleteLiveChatConversation(adminKey: string, conversationId: string) {
+  return await http<{ ok: boolean }>(`/v1/admin/livechat/conversations/${conversationId}`, {
+    method: "DELETE",
+    headers: { "X-Admin-Key": adminKey },
+  });
 }
 
 export type AdminSessionItem = {
@@ -377,12 +368,9 @@ export type AdminEscalationItem = {
 };
 
 export async function adminListEscalations(adminKey: string) {
-  return await http<{ escalations: AdminEscalationItem[] }>(
-    "/v1/admin/escalations",
-    {
-      headers: { "X-Admin-Key": adminKey },
-    }
-  );
+  return await http<{ escalations: AdminEscalationItem[] }>("/v1/admin/escalations", {
+    headers: { "X-Admin-Key": adminKey },
+  });
 }
 
 export async function adminUpdateEscalationStatus(
@@ -390,13 +378,9 @@ export async function adminUpdateEscalationStatus(
   escalationId: string,
   status: "suggested" | "open" | "in_progress" | "closed"
 ) {
-  return await http<{ ok: boolean }>(
-    `/v1/admin/escalations/${escalationId}`,
-    {
-      method: "POST",
-      headers: { "X-Admin-Key": adminKey },
-      body: { status },
-    }
-  );
+  return await http<{ ok: boolean }>(`/v1/admin/escalations/${escalationId}`, {
+    method: "POST",
+    headers: { "X-Admin-Key": adminKey },
+    body: { status },
+  });
 }
-

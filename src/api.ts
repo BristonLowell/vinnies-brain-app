@@ -1,6 +1,10 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { API_BASE_URL } from "./config";
-import type { CreateSessionResponse, ChatResponse, EscalationResponse } from "./types";
+import type {
+  CreateSessionResponse,
+  ChatResponse,
+  EscalationResponse,
+} from "./types";
 
 const SESSION_KEY = "vinniesbrain_session_id";
 const ADMIN_KEY = "vinniesbrain_admin_key";
@@ -38,7 +42,7 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 // ✅ iOS reliability: timeout + retry
 async function http<T>(
   path: string,
-  opts?: { body?: any; headers?: Record<string, string>; method?: string }
+  opts?: { body?: any; headers?: Record<string, string>; method?: string },
 ): Promise<T> {
   const url = `${API_BASE_URL}${path}`;
   const method = opts?.method ?? (opts?.body ? "POST" : "GET");
@@ -100,8 +104,12 @@ export async function clearCurrentUserId() {
 }
 
 export async function claimSessions(sessionIds: string[]) {
-  const session_ids = (sessionIds || []).map((s) => (s || "").trim()).filter(Boolean);
-  return await http<ClaimSessionsResponse>("/v1/sessions/claim", { body: { session_ids } });
+  const session_ids = (sessionIds || [])
+    .map((s) => (s || "").trim())
+    .filter(Boolean);
+  return await http<ClaimSessionsResponse>("/v1/sessions/claim", {
+    body: { session_ids },
+  });
 }
 
 export async function listPreviousIssues() {
@@ -164,18 +172,30 @@ export async function clearSavedSessionId() {
   await AsyncStorage.removeItem(SESSION_KEY);
 }
 
-export async function setContext(sessionId: string, ctx: { airstream_year?: number; category?: string }) {
+export async function setContext(
+  sessionId: string,
+  ctx: { airstream_year?: number; category?: string },
+) {
   const body: any = {};
-  if (typeof ctx.airstream_year === "number" && Number.isFinite(ctx.airstream_year)) {
+  if (
+    typeof ctx.airstream_year === "number" &&
+    Number.isFinite(ctx.airstream_year)
+  ) {
     body.airstream_year = ctx.airstream_year;
   }
   if (typeof ctx.category === "string" && ctx.category.trim().length > 0) {
     body.category = ctx.category.trim();
   }
-  return await http<{ ok: boolean }>(`/v1/sessions/${sessionId}/context`, { body });
+  return await http<{ ok: boolean }>(`/v1/sessions/${sessionId}/context`, {
+    body,
+  });
 }
 
-export async function sendChat(sessionId: string, message: string, airstreamYear?: number) {
+export async function sendChat(
+  sessionId: string,
+  message: string,
+  airstreamYear?: number,
+) {
   const body: any = { session_id: sessionId, message };
   if (typeof airstreamYear === "number" && Number.isFinite(airstreamYear)) {
     body.airstream_year = airstreamYear;
@@ -193,6 +213,23 @@ export async function createEscalation(payload: {
   reset_old?: boolean;
 }) {
   return await http<EscalationResponse>("/v1/escalations", { body: payload });
+}
+
+// ----------------------------
+// Support status (business-hours routing)
+// ----------------------------
+
+export type SupportStatusResponse = {
+  business_hours: boolean;
+  timezone: string;
+  open_hour: number;
+  close_hour: number;
+  next_open?: string | null;
+  support_email: string;
+};
+
+export async function getSupportStatus() {
+  return await http<SupportStatusResponse>("/v1/support/status");
 }
 
 // ----------------------------
@@ -222,10 +259,15 @@ export async function liveChatSend(sessionId: string, body: string) {
 }
 
 export async function liveChatHistory(sessionId: string) {
-  return await http<LiveChatHistoryResponse>(`/v1/livechat/history/${sessionId}`);
+  return await http<LiveChatHistoryResponse>(
+    `/v1/livechat/history/${sessionId}`,
+  );
 }
 
-export async function registerOwnerPushToken(ownerId: string, expoPushToken: string) {
+export async function registerOwnerPushToken(
+  ownerId: string,
+  expoPushToken: string,
+) {
   return await http<{ ok: boolean }>("/v1/owner/push-token", {
     body: { owner_id: ownerId, expo_push_token: expoPushToken },
   });
@@ -271,16 +313,21 @@ export type AdminConversationItem = {
 export async function adminLiveChatConversations(adminKey: string) {
   return await http<{ conversations: AdminConversationItem[] }>(
     "/v1/admin/livechat/conversations",
-    { headers: { "X-Admin-Key": adminKey } }
+    { headers: { "X-Admin-Key": adminKey } },
   );
 }
 
-
-export async function adminDeleteLiveChatConversation(adminKey: string, conversationId: string) {
-  return await http<{ ok: boolean }>(`/v1/admin/livechat/conversations/${conversationId}`, {
-    method: "DELETE",
-    headers: { "X-Admin-Key": adminKey },
-  });
+export async function adminDeleteLiveChatConversation(
+  adminKey: string,
+  conversationId: string,
+) {
+  return await http<{ ok: boolean }>(
+    `/v1/admin/livechat/conversations/${conversationId}`,
+    {
+      method: "DELETE",
+      headers: { "X-Admin-Key": adminKey },
+    },
+  );
 }
 
 export type AdminSessionItem = {
@@ -308,27 +355,9 @@ export async function adminDeleteSession(adminKey: string, sessionId: string) {
   });
 }
 
-export type SupportStatusResponse = {
-  business_hours: boolean;
-  timezone: string;
-  open_hour: number;
-  close_hour: number;
-  next_open?: string | null;
-  support_email: string;
-};
-
-export async function getSupportStatus() {
-  return await http<SupportStatusResponse>("/v1/support/status");
-}
-
-export type SessionHistoryResponse = {
-  session_id: string;
-  messages: { role: string; text: string; created_at?: string | null }[];
-};
-
-export async function getSessionHistory(sessionId: string) {
-  return await http<SessionHistoryResponse>(`/v1/sessions/${sessionId}/history`);
-}
+// ----------------------------
+// Admin: escalations
+// ----------------------------
 
 export type AdminEscalationItem = {
   id: string;
@@ -339,7 +368,7 @@ export type AdminEscalationItem = {
   message?: string | null;
   message_preview?: string | null;
   preferred_contact?: string | null;
-  status?: "open" | "in_progress" | "closed" | string;
+  status?: "suggested" | "open" | "in_progress" | "closed" | string;
   routing?: "chat" | "email" | "both" | string;
   business_hours?: boolean;
   conversation_id?: string | null;
@@ -347,22 +376,27 @@ export type AdminEscalationItem = {
   handled_at?: string | null;
 };
 
-export async function adminListEscalations(adminKey: string, opts?: { status?: string }) {
-  const q = (opts?.status || "").trim();
-  const path = q ? `/v1/admin/escalations?status=${encodeURIComponent(q)}` : "/v1/admin/escalations";
-  return await http<{ escalations: AdminEscalationItem[] }>(path, {
-    headers: { "X-Admin-Key": adminKey },
-  });
+export async function adminListEscalations(adminKey: string) {
+  return await http<{ escalations: AdminEscalationItem[] }>(
+    "/v1/admin/escalations",
+    {
+      headers: { "X-Admin-Key": adminKey },
+    }
+  );
 }
 
 export async function adminUpdateEscalationStatus(
   adminKey: string,
   escalationId: string,
-  status: "open" | "in_progress" | "closed" | string
+  status: "suggested" | "open" | "in_progress" | "closed"
 ) {
-  return await http<{ ok: boolean }>(`/v1/admin/escalations/${escalationId}`, {
-    body: { status },
-    headers: { "X-Admin-Key": adminKey },
-  });
+  return await http<{ ok: boolean }>(
+    `/v1/admin/escalations/${escalationId}`,
+    {
+      method: "POST",
+      headers: { "X-Admin-Key": adminKey },
+      body: { status },
+    }
+  );
 }
 

@@ -1,13 +1,12 @@
-import { Stack, router, usePathname } from "expo-router";
+import { Stack } from "expo-router";
 import "react-native-url-polyfill/auto";
 import "react-native-get-random-values";
-import { Image, View, Text, StyleSheet, Pressable, ActivityIndicator } from "react-native";
+import { Image, View, Text, StyleSheet, ActivityIndicator } from "react-native";
 import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { supabase } from "../src/supabase";
+import { supabase, ensureAnon } from "../src/supabase";
 import { setCurrentUserId, clearCurrentUserId } from "../src/api";
 import { loginBillingUser } from "../src/billing";
-
 
 const BRAND = {
   bg: "#071018",
@@ -42,8 +41,6 @@ function FullscreenLoading() {
 }
 
 export default function Layout() {
-  const pathname = usePathname();
-
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
 
@@ -56,9 +53,9 @@ export default function Layout() {
 
     let active = true;
 
-    // 1️⃣ Always resolve initial session
     (async () => {
       try {
+        // 1) Resolve initial session
         const { data, error } = await supabase.auth.getSession();
         if (!active) return;
 
@@ -68,36 +65,43 @@ export default function Layout() {
         } else {
           setSession(data.session ?? null);
         }
+
+        // 2) Ensure anon session exists (no UI login)
+        const user = await ensureAnon();
+        if (!active) return;
+
+        // Bridge to backend + link RevenueCat to this (anon) user id
+        if (user?.id) {
+          try {
+            await setCurrentUserId(user.id);
+            await loginBillingUser(user.id);
+          } catch {
+            // ignore
+          }
+        }
       } catch (e) {
-        console.warn("getSession threw:", e);
+        console.warn("auth init threw:", e);
         setSession(null);
       } finally {
-        if (active) setAuthReady(true); // ← CRITICAL: always set
+        if (active) setAuthReady(true);
       }
     })();
 
-    // 2️⃣ Listen for auth changes
-    const { data: sub } = supabase.auth.onAuthStateChange(
-      async (_event, newSession) => {
-        setSession(newSession ?? null);
+    // 3) Listen for auth changes (anon sign-in will trigger this)
+    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
+      setSession(newSession ?? null);
 
-        try {
-          if (newSession?.user?.id) {
-            // Existing bridge to backend
-            await setCurrentUserId(newSession.user.id);
-
-            // ⭐ NEW: link RevenueCat user to Supabase user
-            await loginBillingUser(newSession.user.id);
-          } else {
-            await clearCurrentUserId();
-          }
-        } catch {
-          // ignore
+      try {
+        if (newSession?.user?.id) {
+          await setCurrentUserId(newSession.user.id);
+          await loginBillingUser(newSession.user.id);
+        } else {
+          await clearCurrentUserId();
         }
+      } catch {
+        // ignore
       }
-    );
-
-    
+    });
 
     return () => {
       active = false;
@@ -105,27 +109,7 @@ export default function Layout() {
     };
   }, []);
 
-  // 3️⃣ Route guard (never runs until authReady === true)
-  useEffect(() => {
-    if (!authReady) return;
-
-    const onLogin = pathname === "/login";
-
-    if (!session && !onLogin) {
-      router.replace("/login");
-      return;
-    }
-
-    if (session && onLogin) {
-      router.replace("/");
-      return;
-    }
-  }, [authReady, session, pathname]);
-
-  // 4️⃣ Safe loading screen
-  if (!authReady) {
-    return <FullscreenLoading />;
-  }
+  if (!authReady) return <FullscreenLoading />;
 
   return (
     <Stack
@@ -139,17 +123,15 @@ export default function Layout() {
         headerBackButtonMenuEnabled: false,
       }}
     >
-      {/* Auth */}
-      <Stack.Screen name="login" options={{ headerShown: false }} />
-      <Stack.Screen name="settings" options={{ title: "Account" }} />
-
-
       {/* Main app */}
       <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="year" />
       <Stack.Screen name="category" />
       <Stack.Screen name="chat" />
       <Stack.Screen name="paywall" options={{ headerShown: false }} />
+
+      {/* Settings */}
+      <Stack.Screen name="settings" options={{ title: "Account" }} />
 
       {/* Support / escalation */}
       <Stack.Screen name="live-chat" />
@@ -167,7 +149,6 @@ export default function Layout() {
     </Stack>
   );
 }
-
 
 const styles = StyleSheet.create({
   brand: {

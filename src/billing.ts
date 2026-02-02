@@ -1,4 +1,4 @@
-import { Platform } from "react-native";
+import { Platform, Linking } from "react-native";
 import Purchases, { LOG_LEVEL } from "react-native-purchases";
 
 const ENTITLEMENT_ID = "Vinnies Brain Pro";
@@ -70,4 +70,31 @@ export async function hasProEntitlement(): Promise<boolean> {
     console.warn("getCustomerInfo failed", e);
     return false;
   }
+}
+
+// ✅ NEW: restore helper
+export async function restorePurchases(): Promise<boolean> {
+  if (!billingIsSupported()) return false;
+  await configureBillingOnce();
+  if (!configured) return false;
+
+  try {
+    await Purchases.restorePurchases();
+    return await hasProEntitlement();
+  } catch (e) {
+    console.warn("restorePurchases failed", e);
+    return false;
+  }
+}
+
+// ✅ NEW: Manage subscription deep link
+export async function openManageSubscription(): Promise<void> {
+  if (Platform.OS === "ios") {
+    // iOS subscriptions management
+    await Linking.openURL("itms-apps://apps.apple.com/account/subscriptions");
+    return;
+  }
+
+  // Android (when you enable it): generic subscriptions page
+  await Linking.openURL("https://play.google.com/store/account/subscriptions");
 }

@@ -16,6 +16,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { getOrCreateSession, getSavedAdminKey, saveAdminKey, clearAdminKey } from "../src/api";
+import { hasProEntitlement } from "../src/billing"; // ✅ NEW: static import (no dynamic import)
 
 const BRAND = {
   bg: "#071018",
@@ -33,6 +34,9 @@ const VINNIES_LOGO_URI =
 export default function Welcome() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
+
+  // ✅ NEW: prevent paywall flash / double taps while checking
+  const [checkingSub, setCheckingSub] = useState(false);
 
   // Admin key prompt state (only on gear tap)
   const [adminModalOpen, setAdminModalOpen] = useState(false);
@@ -98,6 +102,23 @@ export default function Welcome() {
     }
   }
 
+  // ✅ NEW: single, reliable handler
+  async function startTroubleshooting() {
+    if (!ready || checkingSub) return;
+
+    setCheckingSub(true);
+    try {
+      const ok = await hasProEntitlement();
+      if (ok) {
+        router.push({ pathname: "/year", params: { new: "1" } });
+      } else {
+        router.push({ pathname: "/paywall", params: { redirect: "/year" } });
+      }
+    } finally {
+      setCheckingSub(false);
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <StatusBar barStyle="light-content" />
@@ -113,13 +134,9 @@ export default function Welcome() {
       >
         <Text style={styles.gearText}>⚙️</Text>
       </Pressable>
-      <Pressable
-        onPress={() => router.push("/settings")}
-        style={{ marginTop: 12, alignSelf: "center" }}
-      >
-        <Text style={{ color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>
-          Account / Settings
-        </Text>
+
+      <Pressable onPress={() => router.push("/settings")} style={{ marginTop: 12, alignSelf: "center" }}>
+        <Text style={{ color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>Account / Settings</Text>
       </Pressable>
 
       <View pointerEvents="none" style={styles.bgGlowTop} />
@@ -143,27 +160,22 @@ export default function Welcome() {
           <Pressable
             style={({ pressed }) => [
               styles.primaryBtn,
-              pressed && ready && { opacity: 0.92, transform: [{ scale: 0.99 }] },
-              !ready && { opacity: 0.45 },
+              pressed && ready && !checkingSub && { opacity: 0.92, transform: [{ scale: 0.99 }] },
+              (!ready || checkingSub) && { opacity: 0.45 },
             ]}
-            disabled={!ready}
-            onPress={async () => {
-              // iOS: require pro subscription
-              // Android: show paywall message until Play subscription exists
-              const { hasProEntitlement } = await import("../src/billing");
-              const ok = await hasProEntitlement();
-              if (ok) {
-                router.push({ pathname: "/year", params: { new: "1" } });
-              } else {
-                router.push({ pathname: "/paywall", params: { redirect: "/year" } });
-              }
-            }}
+            disabled={!ready || checkingSub}
+            onPress={startTroubleshooting}
           >
             <View style={styles.primaryBtnInner}>
               {!ready ? (
                 <>
                   <ActivityIndicator />
                   <Text style={styles.primaryBtnText}>Preparing…</Text>
+                </>
+              ) : checkingSub ? (
+                <>
+                  <ActivityIndicator />
+                  <Text style={styles.primaryBtnText}>Checking subscription…</Text>
                 </>
               ) : (
                 <Text style={styles.primaryBtnText}>Start Troubleshooting</Text>

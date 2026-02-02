@@ -1,65 +1,54 @@
-import { Platform } from "react-native";
 import Purchases, { LOG_LEVEL, CustomerInfo } from "react-native-purchases";
+import { Platform } from "react-native";
 
 const ENTITLEMENT_ID = "pro";
 
-function getIosKey(): string {
-  const k = process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY;
-  return (k || "").trim();
-}
-
-let _configured = false;
+let configured = false;
 
 export function billingIsSupported(): boolean {
-  // iOS works now. Android later when you create products + add Android key.
   return Platform.OS === "ios";
 }
 
-export async function configureBillingOnce(): Promise<void> {
-  if (_configured) return;
+export async function configureBilling(): Promise<boolean> {
+  if (!billingIsSupported()) return false;
+  if (configured) return true;
 
-  Purchases.setLogLevel(LOG_LEVEL.WARN);
+  const apiKey = process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY;
 
-  if (Platform.OS === "ios") {
-    const apiKey = getIosKey();
-    if (!apiKey) {
-      // Don’t crash the app; just leave billing disabled.
-      console.warn("RevenueCat iOS API key missing (EXPO_PUBLIC_REVENUECAT_IOS_API_KEY).");
-      return;
-    }
-    Purchases.configure({ apiKey });
-    _configured = true;
-    return;
+  if (!apiKey) {
+    console.warn("RevenueCat iOS API key missing");
+    return false;
   }
 
-  // Android not enabled yet in your flow.
-  return;
+  Purchases.setLogLevel(LOG_LEVEL.WARN);
+  await Purchases.configure({ apiKey });
+
+  configured = true;
+  return true;
 }
 
-export async function loginBillingUser(appUserId: string): Promise<void> {
+export async function loginBillingUser(userId: string) {
   if (!billingIsSupported()) return;
-  await configureBillingOnce();
-  if (!_configured) return;
+  const ok = await configureBilling();
+  if (!ok) return;
 
-  // RevenueCat uses this as the identity key
-  await Purchases.logIn(appUserId);
+  await Purchases.logIn(userId);
 }
 
-export async function getCustomerInfoSafe(): Promise<CustomerInfo | null> {
+export async function getCustomerInfo(): Promise<CustomerInfo | null> {
   if (!billingIsSupported()) return null;
-  await configureBillingOnce();
-  if (!_configured) return null;
+  const ok = await configureBilling();
+  if (!ok) return null;
 
   try {
     return await Purchases.getCustomerInfo();
-  } catch (e) {
-    console.warn("Purchases.getCustomerInfo failed", e);
+  } catch {
     return null;
   }
 }
 
 export async function hasProEntitlement(): Promise<boolean> {
-  const info = await getCustomerInfoSafe();
+  const info = await getCustomerInfo();
   if (!info) return false;
-  return typeof info.entitlements.active[ENTITLEMENT_ID] !== "undefined";
+  return !!info.entitlements.active[ENTITLEMENT_ID];
 }

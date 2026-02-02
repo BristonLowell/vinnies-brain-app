@@ -6,6 +6,8 @@ import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "../src/supabase";
 import { setCurrentUserId, clearCurrentUserId } from "../src/api";
+import { configureBilling, loginBillingUser } from "../src/billing";
+
 
 const BRAND = {
   bg: "#071018",
@@ -46,35 +48,37 @@ export default function Layout() {
 
   // 1) Load initial session + listen for changes
   useEffect(() => {
-    let isMounted = true;
+  let mounted = true;
 
-    (async () => {
-      try {
-        const { data } = await supabase.auth.getSession();
-        if (!isMounted) return;
-        setSession(data.session ?? null);
-      } finally {
-        if (isMounted) setAuthReady(true);
+  (async () => {
+    const { data } = await supabase.auth.getSession();
+    if (!mounted) return;
+
+    setSession(data.session ?? null);
+
+    if (data.session?.user?.id) {
+      await configureBilling();
+      await loginBillingUser(data.session.user.id);
+    }
+  })();
+
+  const { data: sub } = supabase.auth.onAuthStateChange(
+    async (_event, session) => {
+      setSession(session ?? null);
+
+      if (session?.user?.id) {
+        await configureBilling();
+        await loginBillingUser(session.user.id);
       }
-    })();
+    }
+  );
 
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
-      setSession(newSession ?? null);
+  return () => {
+    mounted = false;
+    sub.subscription.unsubscribe();
+  };
+}, []);
 
-      // Maintain your existing backend bridge (X-User-Id)
-      try {
-        if (newSession?.user?.id) await setCurrentUserId(newSession.user.id);
-        else await clearCurrentUserId();
-      } catch {
-        // ignore
-      }
-    });
-
-    return () => {
-      isMounted = false;
-      sub.subscription.unsubscribe();
-    };
-  }, []);
 
   // 2) Route guard
   useEffect(() => {

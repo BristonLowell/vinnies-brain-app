@@ -6,7 +6,7 @@ const ENTITLEMENT_ID = "Vinnies Brain Pro";
 
 // ✅ Since you only have ONE subscription right now,
 // we’ll treat ANY active subscription as “pro” even if entitlements are misconfigured.
-const ACCEPT_ANY_ACTIVE_SUBSCRIPTION = true;
+const ACCEPT_ANY_ACTIVE_SUBSCRIPTION = false;
 
 let configured = false;
 

@@ -1,4 +1,4 @@
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   View,
@@ -13,6 +13,7 @@ import {
   Keyboard,
   StatusBar,
   Alert,
+  BackHandler,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -135,6 +136,11 @@ export default function Chat() {
   const insets = useSafeAreaInsets();
   const safeBottom = Math.max(insets.bottom, 12);
 
+  const goHome = useCallback(() => {
+    // Prevent navigating back to the year picker by replacing the stack entry.
+    router.replace("/");
+  }, [router]);
+
   const params = useLocalSearchParams<{ year?: string; category?: string }>();
   const year = params.year ? Number(params.year) : undefined;
 
@@ -166,6 +172,16 @@ export default function Chat() {
       hide.remove();
     };
   }, []);
+
+  // Android hardware back should go Home (not back to Year page)
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      goHome();
+      return true;
+    });
+    return () => sub.remove();
+  }, [goHome]);
 
   const scrollToBottom = useCallback((animated = true) => {
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated }));
@@ -351,6 +367,28 @@ export default function Chat() {
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <StatusBar barStyle="light-content" />
 
+      <Stack.Screen
+        options={{
+          headerShown: true,
+          title: "",
+          headerShadowVisible: false,
+          headerStyle: { backgroundColor: BRAND.bg },
+          headerTintColor: BRAND.cream,
+          // Disable swipe-back (iOS) so users can’t get back to the year page.
+          gestureEnabled: false,
+          headerLeft: () => (
+            <Pressable
+              onPress={goHome}
+              hitSlop={10}
+              style={({ pressed }) => [styles.headerBack, pressed && { opacity: 0.85 }]}
+            >
+              <Text style={styles.headerBackIcon}>‹</Text>
+              <Text style={styles.headerBackText}>Home</Text>
+            </Pressable>
+          ),
+        }}
+      />
+
       <KeyboardAvoidingView
         style={styles.safe}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
@@ -432,35 +470,30 @@ export default function Chat() {
           </Pressable>
         )}
 
-        <View
-          style={[
-            styles.inputWrap,
-            { paddingBottom: 10 + safeBottom },
-            keyboardOpen ? { paddingBottom: 28 + safeBottom } : null,
-          ]}
-        >
+        <View style={[styles.inputWrap, { paddingBottom: 10 + safeBottom }]}>
           <View style={styles.inputCard}>
             <TextInput
               ref={inputRef}
               value={text}
               onChangeText={setText}
               placeholder="Type your message…"
-              placeholderTextColor={BRAND.faint}
+              placeholderTextColor="rgba(255,255,255,0.45)"
               style={styles.input}
               multiline
-              editable={!sending}
               returnKeyType="send"
-              onSubmitEditing={() => onSend()}
+              onSubmitEditing={() => {
+                if (canSend) onSend();
+              }}
               blurOnSubmit={false}
             />
 
             <Pressable
-              onPress={() => onSend()}
+              onPress={onSend}
               disabled={!canSend}
               style={({ pressed }) => [
                 styles.sendBtn,
                 !canSend && styles.sendBtnDisabled,
-                pressed && canSend && { opacity: 0.92, transform: [{ scale: 0.99 }] },
+                pressed && canSend && { opacity: 0.9, transform: [{ scale: 0.99 }] },
               ]}
             >
               <Text style={styles.sendText}>Send</Text>
@@ -474,6 +507,20 @@ export default function Chat() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: BRAND.bg },
+
+  headerBack: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: BRAND.border,
+  },
+  headerBackIcon: { color: BRAND.cream, fontSize: 22, lineHeight: 22, fontWeight: "900" },
+  headerBackText: { color: BRAND.cream, fontSize: 14, fontWeight: "800" },
 
   listContent: { paddingHorizontal: 14, paddingTop: 14, paddingBottom: 10, gap: 10, flexGrow: 1 },
 

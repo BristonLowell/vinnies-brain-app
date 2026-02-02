@@ -2,17 +2,15 @@ import { Stack, router, usePathname } from "expo-router";
 import "react-native-url-polyfill/auto";
 import "react-native-get-random-values";
 import { Image, View, Text, StyleSheet, Pressable, ActivityIndicator } from "react-native";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "../src/supabase";
 import { setCurrentUserId, clearCurrentUserId } from "../src/api";
-import { configureBilling, loginBillingUser } from "../src/billing";
-
 
 const BRAND = {
   bg: "#071018",
-  headerBg: "#043553", // logo navy
-  cream: "#F1EEDB", // logo cream
+  headerBg: "#043553",
+  cream: "#F1EEDB",
   text: "#FFFFFF",
   muted: "rgba(255,255,255,0.70)",
 };
@@ -43,44 +41,62 @@ function FullscreenLoading() {
 
 export default function Layout() {
   const pathname = usePathname();
+
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
 
-  // 1) Load initial session + listen for changes
+  // Prevent double-init in strict mode / fast refresh
+  const initialized = useRef(false);
+
   useEffect(() => {
-  let mounted = true;
+    if (initialized.current) return;
+    initialized.current = true;
 
-  (async () => {
-    const { data } = await supabase.auth.getSession();
-    if (!mounted) return;
+    let active = true;
 
-    setSession(data.session ?? null);
+    // 1️⃣ Always resolve initial session
+    (async () => {
+      try {
+        const { data, error } = await supabase.auth.getSession();
+        if (!active) return;
 
-    if (data.session?.user?.id) {
-      await configureBilling();
-      await loginBillingUser(data.session.user.id);
-    }
-  })();
-
-  const { data: sub } = supabase.auth.onAuthStateChange(
-    async (_event, session) => {
-      setSession(session ?? null);
-
-      if (session?.user?.id) {
-        await configureBilling();
-        await loginBillingUser(session.user.id);
+        if (error) {
+          console.warn("getSession error:", error.message);
+          setSession(null);
+        } else {
+          setSession(data.session ?? null);
+        }
+      } catch (e) {
+        console.warn("getSession threw:", e);
+        setSession(null);
+      } finally {
+        if (active) setAuthReady(true); // ← CRITICAL: always set
       }
-    }
-  );
+    })();
 
-  return () => {
-    mounted = false;
-    sub.subscription.unsubscribe();
-  };
-}, []);
+    // 2️⃣ Listen for auth changes
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession ?? null);
 
+      // Bridge user id to backend
+      try {
+        if (newSession?.user?.id) {
+          setCurrentUserId(newSession.user.id);
+        } else {
+          clearCurrentUserId();
+        }
+      } catch {
+        // ignore
+      }
+    });
 
-  // 2) Route guard
+    return () => {
+      active = false;
+      sub.subscription.unsubscribe();
+    };
+  }, []);
+
+  // 3️⃣ Route guard (never runs until authReady === true)
   useEffect(() => {
     if (!authReady) return;
 
@@ -90,13 +106,17 @@ export default function Layout() {
       router.replace("/login");
       return;
     }
+
     if (session && onLogin) {
       router.replace("/");
       return;
     }
   }, [authReady, session, pathname]);
 
-  if (!authReady) return <FullscreenLoading />;
+  // 4️⃣ Safe loading screen
+  if (!authReady) {
+    return <FullscreenLoading />;
+  }
 
   return (
     <Stack
@@ -106,50 +126,33 @@ export default function Layout() {
         headerTintColor: BRAND.text,
         headerShadowVisible: false,
         contentStyle: { backgroundColor: BRAND.bg },
-
         headerBackTitle: "",
         headerBackButtonMenuEnabled: false,
       }}
     >
-      {/* Login is outside the normal app flow */}
+      {/* Auth */}
       <Stack.Screen name="login" options={{ headerShown: false }} />
 
+      {/* Main app */}
       <Stack.Screen name="index" options={{ headerShown: false }} />
-      <Stack.Screen name="year" options={{ headerTitle: () => <HeaderBrand /> }} />
-      <Stack.Screen name="category" options={{ headerTitle: () => <HeaderBrand /> }} />
+      <Stack.Screen name="year" />
+      <Stack.Screen name="category" />
+      <Stack.Screen name="chat" />
       <Stack.Screen name="paywall" options={{ headerShown: false }} />
 
+      {/* Support / escalation */}
+      <Stack.Screen name="live-chat" />
+      <Stack.Screen name="escalate" />
+      <Stack.Screen name="success" />
 
-      {/* ✅ Chat back goes Home */}
-      <Stack.Screen
-        name="chat"
-        options={{
-          headerTitle: () => <HeaderBrand />,
-          headerBackVisible: false,
-          headerLeft: () => (
-            <Pressable
-              onPress={() => router.replace("/")}
-              hitSlop={12}
-              style={{ paddingHorizontal: 12, paddingVertical: 8 }}
-            >
-              <Text style={{ color: "#FFFFFF", fontWeight: "900", fontSize: 16 }}>‹ Home</Text>
-            </Pressable>
-          ),
-        }}
-      />
+      {/* Admin */}
+      <Stack.Screen name="admin" />
+      <Stack.Screen name="admin-inbox" />
+      <Stack.Screen name="admin-chat" />
+      <Stack.Screen name="admin-session" />
 
-      <Stack.Screen name="live-chat" options={{ headerTitle: () => <HeaderBrand /> }} />
-      <Stack.Screen name="escalate" options={{ headerTitle: () => <HeaderBrand /> }} />
-      <Stack.Screen name="success" options={{ headerTitle: () => <HeaderBrand /> }} />
-
-      {/* Admin / owner tools */}
-      <Stack.Screen name="admin" options={{ headerTitle: () => <HeaderBrand /> }} />
-      <Stack.Screen name="admin-inbox" options={{ headerTitle: () => <HeaderBrand /> }} />
-      <Stack.Screen name="admin-chat" options={{ headerTitle: () => <HeaderBrand /> }} />
-      <Stack.Screen name="admin-session" options={{ headerTitle: () => <HeaderBrand /> }} />
-
-      <Stack.Screen name="inbox" options={{ headerTitle: () => <HeaderBrand /> }} />
-      <Stack.Screen name="modal" options={{ presentation: "modal", title: "Modal" }} />
+      <Stack.Screen name="inbox" />
+      <Stack.Screen name="modal" options={{ presentation: "modal" }} />
     </Stack>
   );
 }
@@ -162,8 +165,8 @@ const styles = StyleSheet.create({
     maxWidth: 300,
   },
   logo: { width: 56, height: 22 },
-  title: { color: BRAND.cream, fontWeight: "900", fontSize: 14, letterSpacing: 0.2 },
-  sub: { marginTop: 1, color: BRAND.muted, fontWeight: "700", fontSize: 11 },
+  title: { color: BRAND.cream, fontWeight: "900", fontSize: 14 },
+  sub: { color: BRAND.muted, fontWeight: "700", fontSize: 11 },
 
   loadingWrap: {
     flex: 1,
@@ -172,5 +175,5 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 10,
   },
-  loadingText: { color: "rgba(255,255,255,0.70)", fontWeight: "800" },
+  loadingText: { color: BRAND.muted, fontWeight: "800" },
 });

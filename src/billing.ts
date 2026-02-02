@@ -1,54 +1,73 @@
-import Purchases, { LOG_LEVEL, CustomerInfo } from "react-native-purchases";
 import { Platform } from "react-native";
+import Purchases, { LOG_LEVEL } from "react-native-purchases";
 
 const ENTITLEMENT_ID = "pro";
-
 let configured = false;
 
-export function billingIsSupported(): boolean {
-  return Platform.OS === "ios";
+function getIosKey(): string {
+  return (process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY || "").trim();
+}
+function getAndroidKey(): string {
+  return (process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY || "").trim();
 }
 
-export async function configureBilling(): Promise<boolean> {
-  if (!billingIsSupported()) return false;
-  if (configured) return true;
+export function billingIsSupported(): boolean {
+  if (Platform.OS === "ios") return true;
+  if (Platform.OS === "android") return Boolean(getAndroidKey()); // enable later
+  return false;
+}
 
-  const apiKey = process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY;
-
-  if (!apiKey) {
-    console.warn("RevenueCat iOS API key missing");
-    return false;
-  }
+export async function configureBillingOnce(): Promise<void> {
+  if (configured) return;
 
   Purchases.setLogLevel(LOG_LEVEL.WARN);
-  await Purchases.configure({ apiKey });
 
-  configured = true;
-  return true;
+  if (Platform.OS === "ios") {
+    const apiKey = getIosKey();
+    if (!apiKey) {
+      console.warn("Missing EXPO_PUBLIC_REVENUECAT_IOS_API_KEY");
+      return;
+    }
+    Purchases.configure({ apiKey });
+    configured = true;
+    return;
+  }
+
+  if (Platform.OS === "android") {
+    const apiKey = getAndroidKey();
+    if (!apiKey) return;
+    Purchases.configure({ apiKey });
+    configured = true;
+  }
 }
 
-export async function loginBillingUser(userId: string) {
+// Backwards-compatible alias (some files import configureBilling)
+export async function configureBilling(): Promise<void> {
+  return await configureBillingOnce();
+}
+
+export async function loginBillingUser(appUserId: string): Promise<void> {
   if (!billingIsSupported()) return;
-  const ok = await configureBilling();
-  if (!ok) return;
-
-  await Purchases.logIn(userId);
-}
-
-export async function getCustomerInfo(): Promise<CustomerInfo | null> {
-  if (!billingIsSupported()) return null;
-  const ok = await configureBilling();
-  if (!ok) return null;
+  await configureBillingOnce();
+  if (!configured) return;
 
   try {
-    return await Purchases.getCustomerInfo();
-  } catch {
-    return null;
+    await Purchases.logIn(appUserId);
+  } catch (e) {
+    console.warn("Purchases.logIn failed", e);
   }
 }
 
 export async function hasProEntitlement(): Promise<boolean> {
-  const info = await getCustomerInfo();
-  if (!info) return false;
-  return !!info.entitlements.active[ENTITLEMENT_ID];
+  if (!billingIsSupported()) return false;
+  await configureBillingOnce();
+  if (!configured) return false;
+
+  try {
+    const info = await Purchases.getCustomerInfo();
+    return Boolean(info.entitlements.active[ENTITLEMENT_ID]);
+  } catch (e) {
+    console.warn("getCustomerInfo failed", e);
+    return false;
+  }
 }

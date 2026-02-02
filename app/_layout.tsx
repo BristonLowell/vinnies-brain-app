@@ -6,6 +6,8 @@ import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "../src/supabase";
 import { setCurrentUserId, clearCurrentUserId } from "../src/api";
+import { loginBillingUser } from "../src/billing";
+
 
 const BRAND = {
   bg: "#071018",
@@ -75,20 +77,27 @@ export default function Layout() {
     })();
 
     // 2️⃣ Listen for auth changes
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      setSession(newSession ?? null);
+    const { data: sub } = supabase.auth.onAuthStateChange(
+      async (_event, newSession) => {
+        setSession(newSession ?? null);
 
-      // Bridge user id to backend
-      try {
-        if (newSession?.user?.id) {
-          setCurrentUserId(newSession.user.id);
-        } else {
-          clearCurrentUserId();
+        try {
+          if (newSession?.user?.id) {
+            // Existing bridge to backend
+            await setCurrentUserId(newSession.user.id);
+
+            // ⭐ NEW: link RevenueCat user to Supabase user
+            await loginBillingUser(newSession.user.id);
+          } else {
+            await clearCurrentUserId();
+          }
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
       }
-    });
+    );
+
+    
 
     return () => {
       active = false;
@@ -132,6 +141,8 @@ export default function Layout() {
     >
       {/* Auth */}
       <Stack.Screen name="login" options={{ headerShown: false }} />
+      <Stack.Screen name="settings" options={{ title: "Account" }} />
+
 
       {/* Main app */}
       <Stack.Screen name="index" options={{ headerShown: false }} />
@@ -156,6 +167,7 @@ export default function Layout() {
     </Stack>
   );
 }
+
 
 const styles = StyleSheet.create({
   brand: {

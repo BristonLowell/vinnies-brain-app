@@ -1,7 +1,7 @@
 import { Platform } from "react-native";
 import Purchases, { LOG_LEVEL } from "react-native-purchases";
 
-const ENTITLEMENT_ID = "pro";
+const ENTITLEMENT_ID = "Vinnies Brain Pro";
 let configured = false;
 
 function getIosKey(): string {

@@ -113,6 +113,14 @@ export default function Welcome() {
       >
         <Text style={styles.gearText}>⚙️</Text>
       </Pressable>
+      <Pressable
+        onPress={() => router.push("/settings")}
+        style={{ marginTop: 12, alignSelf: "center" }}
+      >
+        <Text style={{ color: "rgba(255,255,255,0.7)", fontWeight: "800" }}>
+          Account / Settings
+        </Text>
+      </Pressable>
 
       <View pointerEvents="none" style={styles.bgGlowTop} />
       <View pointerEvents="none" style={styles.bgGlowBottom} />

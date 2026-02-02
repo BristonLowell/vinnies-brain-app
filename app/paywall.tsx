@@ -8,10 +8,13 @@ import {
   billingIsSupported,
   restorePurchases,
   openManageSubscription,
+  debugCustomerInfo,
 } from "../src/billing";
 
 function normalizeRedirect(input: unknown): Href {
-  const raw = typeof input === "string" ? input : Array.isArray(input) ? input[0] : undefined;
+  const raw =
+    typeof input === "string" ? input : Array.isArray(input) ? input[0] : undefined;
+
   if (raw && raw.startsWith("/")) return raw as Href;
   return "/year";
 }
@@ -34,21 +37,20 @@ export default function PaywallScreen() {
 
         await configureBillingOnce();
 
-        // if already pro, skip
+        // If already subscribed, skip paywall
         const alreadyPro = await hasProEntitlement();
         if (alreadyPro) {
           router.replace(redirect);
           return;
         }
 
-        // load offerings
         const offerings = await Purchases.getOfferings();
         const current = offerings.current ?? null;
 
         if (!current || current.availablePackages.length === 0) {
           Alert.alert(
             "Subscriptions unavailable",
-            "No subscription packages found. Double-check RevenueCat offering 'default' is active."
+            "No subscription packages found. Double-check RevenueCat offering is active."
           );
           router.replace("/");
           return;
@@ -68,7 +70,6 @@ export default function PaywallScreen() {
   async function buy(pkg: PurchasesPackage) {
     try {
       setLoading(true);
-
       await Purchases.purchasePackage(pkg);
 
       const ok = await hasProEntitlement();
@@ -77,21 +78,21 @@ export default function PaywallScreen() {
     } catch (e: any) {
       const msg = (e?.message || "").toLowerCase();
 
-      // User cancelled is normal
+      // User cancelled
       if (msg.includes("cancel")) {
         router.replace("/");
         return;
       }
 
-      // ✅ Treat "already subscribed" as success path
+      // ✅ Apple says already subscribed — treat as success path:
+      // run restore + re-check, then route forward.
       if (msg.includes("already") && msg.includes("subscrib")) {
         const ok = await restorePurchases();
-        if (ok) router.replace(redirect);
-        else {
-          Alert.alert(
-            "Already subscribed",
-            "Your Apple ID shows an active subscription, but it hasn’t synced yet. Try Restore Purchases again in a moment."
-          );
+        if (ok) {
+          router.replace(redirect);
+        } else {
+          const dbg = await debugCustomerInfo();
+          Alert.alert("Subscribed in Apple, not in app", dbg);
           router.replace("/");
         }
         return;
@@ -108,8 +109,13 @@ export default function PaywallScreen() {
     try {
       setLoading(true);
       const ok = await restorePurchases();
-      if (ok) router.replace(redirect);
-      else Alert.alert("Nothing to restore", "No active subscription found for this Apple ID.");
+
+      if (ok) {
+        router.replace(redirect);
+      } else {
+        const dbg = await debugCustomerInfo();
+        Alert.alert("Nothing to restore", `No active subscription found in RevenueCat.\n\n${dbg}`);
+      }
     } catch (e: any) {
       Alert.alert("Restore failed", e?.message || "Could not restore purchases.");
     } finally {
@@ -121,7 +127,7 @@ export default function PaywallScreen() {
     try {
       await openManageSubscription();
     } catch {
-      Alert.alert("Open subscriptions", "Go to Settings → Apple ID → Subscriptions.");
+      Alert.alert("Manage subscription", "Open Settings → Apple ID → Subscriptions.");
     }
   }
 
@@ -174,49 +180,16 @@ export default function PaywallScreen() {
 }
 
 const styles = StyleSheet.create({
-  wrap: {
-    flex: 1,
-    backgroundColor: "#071018",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 18,
-    gap: 12,
-  },
+  wrap: { flex: 1, backgroundColor: "#071018", alignItems: "center", justifyContent: "center", padding: 18, gap: 12 },
   title: { color: "white", fontWeight: "900", fontSize: 20, textAlign: "center" },
   sub: { color: "rgba(255,255,255,0.75)", fontWeight: "700", textAlign: "center" },
 
-  primaryBtn: {
-    width: "100%",
-    maxWidth: 480,
-    height: 52,
-    borderRadius: 16,
-    backgroundColor: "#F1EEDB",
-    alignItems: "center",
-    justifyContent: "center",
-  },
+  primaryBtn: { width: "100%", maxWidth: 480, height: 52, borderRadius: 16, backgroundColor: "#F1EEDB", alignItems: "center", justifyContent: "center" },
   primaryBtnText: { color: "#043553", fontWeight: "900" },
 
-  ghostBtn: {
-    width: "100%",
-    maxWidth: 480,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: "rgba(255,255,255,0.08)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
+  ghostBtn: { width: "100%", maxWidth: 480, height: 48, borderRadius: 16, backgroundColor: "rgba(255,255,255,0.08)", borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", alignItems: "center", justifyContent: "center" },
   ghostBtnText: { color: "white", fontWeight: "900" },
 
-  btn: {
-    marginTop: 6,
-    height: 48,
-    paddingHorizontal: 18,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#F1EEDB",
-  },
+  btn: { marginTop: 6, height: 48, paddingHorizontal: 18, borderRadius: 14, alignItems: "center", justifyContent: "center", backgroundColor: "#F1EEDB" },
   btnText: { color: "#043553", fontWeight: "900" },
 });

@@ -1,7 +1,13 @@
 import { Platform, Linking } from "react-native";
 import Purchases, { LOG_LEVEL } from "react-native-purchases";
 
+// Your RevenueCat entitlement identifier (you said this is correct)
 const ENTITLEMENT_ID = "Vinnies Brain Pro";
+
+// ✅ Since you only have ONE subscription right now,
+// we’ll treat ANY active subscription as “pro” even if entitlements are misconfigured.
+const ACCEPT_ANY_ACTIVE_SUBSCRIPTION = true;
+
 let configured = false;
 
 function getIosKey(): string {
@@ -15,6 +21,27 @@ export function billingIsSupported(): boolean {
   if (Platform.OS === "ios") return true;
   if (Platform.OS === "android") return Boolean(getAndroidKey()); // enable later
   return false;
+}
+
+export async function debugCustomerInfo(): Promise<string> {
+  await configureBillingOnce();
+  const info = await Purchases.getCustomerInfo();
+
+  const activeEntitlements = Object.keys(info.entitlements.active || {});
+  const allEntitlements = Object.keys(info.entitlements.all || {});
+  const activeSubs = info.activeSubscriptions || [];
+
+  const latestExp =
+    (activeEntitlements[0] &&
+      info.entitlements.active[activeEntitlements[0]]?.expirationDate) ||
+    null;
+
+  return [
+    `activeEntitlements: ${JSON.stringify(activeEntitlements)}`,
+    `allEntitlements: ${JSON.stringify(allEntitlements)}`,
+    `activeSubscriptions: ${JSON.stringify(activeSubs)}`,
+    `exampleExpiration: ${latestExp ?? "n/a"}`,
+  ].join("\n");
 }
 
 export async function configureBillingOnce(): Promise<void> {
@@ -65,14 +92,21 @@ export async function hasProEntitlement(): Promise<boolean> {
 
   try {
     const info = await Purchases.getCustomerInfo();
-    return Boolean(info.entitlements.active[ENTITLEMENT_ID]);
+
+    // Primary: entitlement check
+    const hasEnt = Boolean(info.entitlements.active?.[ENTITLEMENT_ID]);
+
+    // Fallback: treat any active subscription as pro (since you have one sub)
+    const hasActiveSub =
+      ACCEPT_ANY_ACTIVE_SUBSCRIPTION && (info.activeSubscriptions?.length ?? 0) > 0;
+
+    return hasEnt || hasActiveSub;
   } catch (e) {
     console.warn("getCustomerInfo failed", e);
     return false;
   }
 }
 
-// ✅ NEW: restore helper
 export async function restorePurchases(): Promise<boolean> {
   if (!billingIsSupported()) return false;
   await configureBillingOnce();
@@ -87,14 +121,10 @@ export async function restorePurchases(): Promise<boolean> {
   }
 }
 
-// ✅ NEW: Manage subscription deep link
 export async function openManageSubscription(): Promise<void> {
   if (Platform.OS === "ios") {
-    // iOS subscriptions management
     await Linking.openURL("itms-apps://apps.apple.com/account/subscriptions");
     return;
   }
-
-  // Android (when you enable it): generic subscriptions page
   await Linking.openURL("https://play.google.com/store/account/subscriptions");
 }

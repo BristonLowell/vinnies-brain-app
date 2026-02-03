@@ -54,7 +54,9 @@ const INITIAL_ASSISTANT: ChatItem = {
 };
 
 const INPUT_BAR_EST_HEIGHT = 76;
-const NEXT_SESSION_KEY = "vinniesbrain_next_session_id";
+
+// ✅ must match index.tsx
+const FORCE_NEW_SESSION_KEY = "vinniesbrain_force_new_session";
 
 function initials(label: string) {
   const s = (label || "").trim();
@@ -138,7 +140,6 @@ export default function Chat() {
   const safeBottom = Math.max(insets.bottom, 12);
 
   const goHome = useCallback(() => {
-    // Prevent navigating back to the year picker by replacing the stack entry.
     router.replace("/");
   }, [router]);
 
@@ -153,17 +154,13 @@ export default function Chat() {
   const [sending, setSending] = useState(false);
   const [showEscalate, setShowEscalate] = useState(false);
 
-  // Server-decided business-hours so iOS/Android match.
   const [businessHours, setBusinessHours] = useState<boolean | null>(null);
   const [nextOpen, setNextOpen] = useState<string>("");
 
   const listRef = useRef<FlatList<ChatItem>>(null);
   const inputRef = useRef<TextInput>(null);
 
-  const ITEMS_KEY = useMemo(
-    () => (sessionId ? `vinniesbrain_chat_items_${sessionId}` : ""),
-    [sessionId]
-  );
+  const ITEMS_KEY = useMemo(() => (sessionId ? `vinniesbrain_chat_items_${sessionId}` : ""), [sessionId]);
 
   useEffect(() => {
     const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardOpen(true));
@@ -174,7 +171,6 @@ export default function Chat() {
     };
   }, []);
 
-  // Android hardware back should go Home (not back to Year page)
   useEffect(() => {
     if (Platform.OS !== "android") return;
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -192,7 +188,6 @@ export default function Chat() {
     scrollToBottom(true);
   }, [items.length, scrollToBottom]);
 
-  // Load support status (business-hours routing)
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -212,41 +207,38 @@ export default function Chat() {
     };
   }, []);
 
-  // Load the session and restore chat items for that session if present.
-  // If the user just tapped "Start Troubleshooting", we force a brand-new session id.
+  // ✅ Updated: honor FORCE_NEW_SESSION_KEY
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
       try {
-        // ✅ New-session flow (set by index.tsx)
+        // If Home requested a clean start, do NOT restore old cached messages.
+        let forceNew = false;
         try {
-          const forced = await AsyncStorage.getItem(NEXT_SESSION_KEY);
-          if (forced) {
-            await AsyncStorage.removeItem(NEXT_SESSION_KEY);
-            if (!cancelled) {
-              setSessionId(forced);
-              setItems([INITIAL_ASSISTANT]);
-              setShowEscalate(false);
-            }
-            return;
-          }
+          const flag = await AsyncStorage.getItem(FORCE_NEW_SESSION_KEY);
+          forceNew = flag === "1";
+          if (forceNew) await AsyncStorage.removeItem(FORCE_NEW_SESSION_KEY);
         } catch {}
 
-        // ✅ Default: reuse current active session (resume)
         const sid = await getOrCreateSession();
         if (cancelled) return;
 
         setSessionId(sid);
 
-        // Load saved items for this session (if any)
+        if (forceNew) {
+          setItems([INITIAL_ASSISTANT]);
+          setShowEscalate(false);
+          return;
+        }
+
+        // Normal resume: load saved items (if any)
         try {
           const raw = await AsyncStorage.getItem(`vinniesbrain_chat_items_${sid}`);
           if (raw) {
             const parsed = JSON.parse(raw) as ChatItem[];
             if (Array.isArray(parsed) && parsed.length > 0) {
               setItems(parsed);
-
               const last = [...parsed].reverse().find((x) => x.role === "assistant");
               setShowEscalate(!!last?.meta?.showEscalation);
               return;
@@ -267,7 +259,6 @@ export default function Chat() {
     };
   }, []);
 
-  // Persist items per session
   useEffect(() => {
     if (!ITEMS_KEY) return;
     (async () => {
@@ -277,15 +268,11 @@ export default function Chat() {
     })();
   }, [ITEMS_KEY, items]);
 
-  const canSend = useMemo(() => {
-    return !sending && text.trim().length > 0 && !!sessionId;
-  }, [sending, text, sessionId]);
+  const canSend = useMemo(() => !sending && text.trim().length > 0 && !!sessionId, [sending, text, sessionId]);
 
-  // ✅ Gate escalation CTAs until the user has gone through a few steps
   const userTurns = useMemo(() => items.filter((x) => x.role === "user").length, [items]);
   const assistantTurns = useMemo(() => {
     const total = items.filter((x) => x.role === "assistant").length;
-    // Don't count the initial “What’s going on…” as a “step”
     return Math.max(0, total - 1);
   }, [items]);
 
@@ -391,13 +378,15 @@ export default function Chat() {
           headerShadowVisible: false,
           headerStyle: { backgroundColor: BRAND.bg },
           headerTintColor: BRAND.cream,
-          // Disable swipe-back (iOS) so users can’t get back to the year page.
           gestureEnabled: false,
           headerLeft: () => (
             <Pressable
               onPress={goHome}
               hitSlop={10}
-              style={({ pressed }) => [styles.headerBack, pressed && { opacity: 0.88, transform: [{ scale: 0.99 }] }]}
+              style={({ pressed }) => [
+                styles.headerBack,
+                pressed && { opacity: 0.88, transform: [{ scale: 0.99 }] },
+              ]}
             >
               <Text style={styles.headerBackIcon}>←</Text>
               <Text style={styles.headerBackText}>Home</Text>

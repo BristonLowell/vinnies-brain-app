@@ -17,7 +17,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getOrCreateSession, getSavedAdminKey, saveAdminKey, clearAdminKey } from "../src/api";
-import { hasProEntitlement } from "../src/billing"; // ✅ NEW: static import (no dynamic import)
+import { hasProEntitlement } from "../src/billing";
 
 const BRAND = {
   bg: "#071018",
@@ -29,15 +29,48 @@ const BRAND = {
   faint: "rgba(255,255,255,0.45)",
 };
 
-const NEXT_SESSION_KEY = "vinniesbrain_next_session_id";
+// ✅ New: force-new-session flag (chat.tsx will honor this)
+const FORCE_NEW_SESSION_KEY = "vinniesbrain_force_new_session";
 
-function makeSessionId() {
-  // Prefer crypto.randomUUID if available; fall back to a reasonably-unique string.
-  // Session IDs are not security-sensitive; they just need to be unique enough.
-  const anyCrypto: any = (globalThis as any).crypto;
-  if (anyCrypto && typeof anyCrypto.randomUUID === "function") return anyCrypto.randomUUID();
-  const rnd = () => Math.random().toString(16).slice(2);
-  return `sess_${Date.now().toString(16)}_${rnd()}_${rnd()}`;
+// These are common names apps end up using. We’ll remove them safely.
+// (We also remove anything that looks like a session key but avoid admin keys.)
+const SESSION_KEY_CANDIDATES = [
+  "vinniesbrain_session_id",
+  "vinniesbrain_current_session_id",
+  "vinniesbrain_active_session_id",
+  "vinniesbrain_last_session_id",
+  "session_id",
+  "current_session_id",
+];
+
+async function forceFreshTroubleshootingSession() {
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+
+    // Remove any per-session cached chat items
+    const chatItemKeys = keys.filter((k) => k.startsWith("vinniesbrain_chat_items_"));
+
+    // Remove likely session id keys (but don’t touch admin keys/preferences)
+    const sessionishKeys = keys.filter((k) => {
+      const kl = k.toLowerCase();
+      if (kl.includes("admin")) return false; // keep admin key(s)
+      if (kl.includes("entitlement")) return false; // keep subscription cache(s) if any
+      if (SESSION_KEY_CANDIDATES.includes(k)) return true;
+      // also catch session-like keys your api.ts might be using
+      if (kl.startsWith("vinniesbrain") && (kl.includes("session") || kl.includes("conversation"))) return true;
+      return false;
+    });
+
+    // Use multiRemove for speed
+    await AsyncStorage.multiRemove([...chatItemKeys, ...sessionishKeys]);
+  } catch {
+    // swallow — we still set the flag below
+  }
+
+  // Tell chat.tsx to start clean no matter what
+  try {
+    await AsyncStorage.setItem(FORCE_NEW_SESSION_KEY, "1");
+  } catch {}
 }
 
 const VINNIES_LOGO_URI =
@@ -47,10 +80,8 @@ export default function Welcome() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
 
-  // ✅ NEW: prevent paywall flash / double taps while checking
   const [checkingSub, setCheckingSub] = useState(false);
 
-  // Admin key prompt state (only on gear tap)
   const [adminModalOpen, setAdminModalOpen] = useState(false);
   const [adminKeyInput, setAdminKeyInput] = useState("");
   const [adminSaving, setAdminSaving] = useState(false);
@@ -92,7 +123,6 @@ export default function Welcome() {
     try {
       await saveAdminKey(key);
       setAdminModalOpen(false);
-      // ✅ Only entry point to admin
       router.push("/admin");
     } catch {
       setAdminErr("Could not save admin key. Try again.");
@@ -114,7 +144,7 @@ export default function Welcome() {
     }
   }
 
-  // ✅ NEW: single, reliable handler
+  // ✅ Updated: now clears local resume + forces a fresh server session
   async function startTroubleshooting() {
     if (!ready || checkingSub) return;
 
@@ -122,11 +152,7 @@ export default function Welcome() {
     try {
       const ok = await hasProEntitlement();
       if (ok) {
-        // ✅ Force a brand-new troubleshooting session every time the user taps Start Troubleshooting
-        const newSid = makeSessionId();
-        try {
-          await AsyncStorage.setItem(NEXT_SESSION_KEY, newSid);
-        } catch {}
+        await forceFreshTroubleshootingSession();
         router.push({ pathname: "/year", params: { new: "1" } });
       } else {
         router.push({ pathname: "/paywall", params: { redirect: "/year" } });
@@ -140,7 +166,6 @@ export default function Welcome() {
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <StatusBar barStyle="light-content" />
 
-      {/* ✅ moved away from corner + bigger tap target */}
       <Pressable
         onPress={onPressGear}
         hitSlop={18}
@@ -200,13 +225,10 @@ export default function Welcome() {
             </View>
           </Pressable>
 
-          <Text style={styles.microHint}>
-            The more detail you use, the easier it will be to find the solution
-          </Text>
+          <Text style={styles.microHint}>The more detail you use, the easier it will be to find the solution</Text>
         </View>
       </View>
 
-      {/* Admin Key Modal */}
       <Modal visible={adminModalOpen} transparent animationType="fade" onRequestClose={() => setAdminModalOpen(false)}>
         <Pressable style={styles.modalBackdrop} onPress={() => setAdminModalOpen(false)} />
 
@@ -217,36 +239,30 @@ export default function Welcome() {
 
             <TextInput
               value={adminKeyInput}
-              onChangeText={setAdminKeyInput}
-              placeholder="Admin key"
-              placeholderTextColor={BRAND.faint}
+              onChangeText={(t) => {
+                setAdminKeyInput(t);
+                if (adminErr) setAdminErr("");
+              }}
+              placeholder="ADMIN_API_KEY"
+              placeholderTextColor="rgba(255,255,255,0.45)"
               autoCapitalize="none"
               autoCorrect={false}
+              secureTextEntry
               style={styles.modalInput}
+              editable={!adminSaving}
+              returnKeyType="done"
               onSubmitEditing={onSaveAndGo}
             />
 
             {!!adminErr && <Text style={styles.modalErr}>{adminErr}</Text>}
 
-            <View style={styles.modalRow}>
+            <View style={styles.modalBtnsRow}>
               <Pressable
                 onPress={() => setAdminModalOpen(false)}
-                style={({ pressed }) => [styles.modalBtn, pressed && { opacity: 0.9 }]}
-              >
-                <Text style={styles.modalBtnText}>Cancel</Text>
-              </Pressable>
-
-              <Pressable
-                onPress={onClearKey}
                 disabled={adminSaving}
-                style={({ pressed }) => [
-                  styles.modalBtn,
-                  styles.modalBtnGhost,
-                  pressed && { opacity: 0.9 },
-                  adminSaving && { opacity: 0.6 },
-                ]}
+                style={({ pressed }) => [styles.modalBtn, styles.modalBtnGhost, pressed && { opacity: 0.9 }]}
               >
-                <Text style={styles.modalBtnText}>Clear</Text>
+                <Text style={styles.modalBtnGhostText}>Cancel</Text>
               </Pressable>
 
               <Pressable
@@ -255,13 +271,17 @@ export default function Welcome() {
                 style={({ pressed }) => [
                   styles.modalBtn,
                   styles.modalBtnPrimary,
-                  pressed && { opacity: 0.9 },
+                  pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] },
                   adminSaving && { opacity: 0.6 },
                 ]}
               >
-                {adminSaving ? <ActivityIndicator /> : <Text style={styles.modalBtnTextPrimary}>Continue</Text>}
+                <Text style={styles.modalBtnPrimaryText}>{adminSaving ? "Saving…" : "Continue"}</Text>
               </Pressable>
             </View>
+
+            <Pressable onPress={onClearKey} disabled={adminSaving} style={styles.clearKeyBtn}>
+              <Text style={styles.clearKeyText}>Clear saved key</Text>
+            </Pressable>
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -274,109 +294,139 @@ const styles = StyleSheet.create({
 
   gearBtn: {
     position: "absolute",
-    top: 10,
-    right: 12,
+    top: 22,
+    right: 22,
     zIndex: 10,
-    backgroundColor: BRAND.surface,
-    borderColor: BRAND.border,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: "rgba(255,255,255,0.10)",
     borderWidth: 1,
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderColor: BRAND.border,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  gearText: { fontSize: 18 },
+  gearText: { fontSize: 20 },
 
   bgGlowTop: {
     position: "absolute",
-    top: -120,
-    left: -120,
-    width: 300,
-    height: 300,
-    borderRadius: 160,
-    backgroundColor: "rgba(4,53,83,0.35)",
+    top: -150,
+    left: -110,
+    width: 360,
+    height: 360,
+    borderRadius: 999,
+    backgroundColor: "rgba(4,53,83,0.25)",
   },
   bgGlowBottom: {
     position: "absolute",
-    bottom: -160,
-    right: -160,
-    width: 340,
-    height: 340,
-    borderRadius: 180,
-    backgroundColor: "rgba(4,53,83,0.25)",
+    bottom: -170,
+    right: -130,
+    width: 460,
+    height: 460,
+    borderRadius: 999,
+    backgroundColor: "rgba(241,238,219,0.06)",
   },
 
-  container: { flex: 1, paddingHorizontal: 18, justifyContent: "center" },
-
-  brandWrap: { alignItems: "center", marginBottom: 18 },
-  logoWrap: {
-    width: "100%",
-    height: 130,
+  container: {
+    flex: 1,
+    paddingHorizontal: 18,
+    paddingTop: 20,
+    paddingBottom: 18,
     justifyContent: "center",
-    alignItems: "center",
+    gap: 16,
   },
-  logo: { width: "100%", height: "100%" },
 
-  brandText: { alignItems: "center", marginTop: 6 },
-  title: { color: BRAND.cream, fontSize: 34, fontWeight: "900", letterSpacing: 0.3 },
-  subtitle: { color: BRAND.muted, marginTop: 4, fontWeight: "700" },
+  brandWrap: { gap: 10, marginBottom: 6, alignItems: "stretch" },
+  brandText: { alignItems: "center", gap: 6 },
+
+  logoWrap: {
+    height: 110,
+    width: "100%",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 0,
+  },
+  logo: { width: "100%", height: 90 },
+
+  title: { color: "white", fontSize: 34, fontWeight: "900", letterSpacing: -0.3 },
+  subtitle: { color: BRAND.muted, fontSize: 14, textAlign: "center" },
 
   card: {
-    marginTop: 10,
-    backgroundColor: BRAND.surface,
-    borderColor: BRAND.border,
-    borderWidth: 1,
     borderRadius: 18,
     padding: 16,
+    backgroundColor: BRAND.surface,
+    borderWidth: 1,
+    borderColor: BRAND.border,
+    gap: 12,
   },
-  cardTitle: { color: BRAND.cream, fontWeight: "900", marginBottom: 10, fontSize: 16 },
+  cardTitle: { color: BRAND.cream, fontSize: 16, fontWeight: "900" },
 
   primaryBtn: {
-    backgroundColor: BRAND.navy,
+    height: 52,
     borderRadius: 16,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.14)",
+    backgroundColor: BRAND.cream,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  primaryBtnInner: { alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 10 },
-  primaryBtnText: { color: BRAND.cream, fontWeight: "900", fontSize: 16 },
+  primaryBtnInner: { flexDirection: "row", gap: 10, alignItems: "center" },
+  primaryBtnText: { color: BRAND.navy, fontWeight: "900", fontSize: 15 },
 
-  microHint: { color: BRAND.muted, marginTop: 12, textAlign: "center", fontWeight: "700" },
+  microHint: { marginTop: 2, color: BRAND.faint, fontSize: 11, lineHeight: 15 },
 
-  modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)" },
-  modalCenter: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, justifyContent: "center" },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.55)",
+  },
+  modalCenter: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 18,
+  },
   modalCard: {
-    marginHorizontal: 18,
-    backgroundColor: "#0C1A26",
+    width: "100%",
+    maxWidth: 420,
     borderRadius: 18,
     padding: 16,
-    borderColor: BRAND.border,
+    backgroundColor: "#0B0F14",
     borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    gap: 10,
   },
-  modalTitle: { color: BRAND.cream, fontSize: 18, fontWeight: "900" },
-  modalSub: { color: BRAND.muted, marginTop: 4, marginBottom: 12, fontWeight: "700" },
+  modalTitle: { color: "white", fontWeight: "900", fontSize: 18 },
+  modalSub: { color: "rgba(255,255,255,0.70)", fontWeight: "700", fontSize: 12, marginTop: -2 },
+
   modalInput: {
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderColor: BRAND.border,
-    borderWidth: 1,
+    height: 46,
     borderRadius: 14,
     paddingHorizontal: 12,
-    paddingVertical: 12,
-    color: BRAND.cream,
+    color: "white",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
     fontWeight: "800",
   },
-  modalErr: { color: "#FFB4B4", marginTop: 10, fontWeight: "800" },
-  modalRow: { flexDirection: "row", gap: 10, marginTop: 14, justifyContent: "flex-end" },
+
+  modalErr: { color: "rgba(239,68,68,0.95)", fontWeight: "900", marginTop: 2 },
+
+  modalBtnsRow: { flexDirection: "row", gap: 10, marginTop: 6 },
   modalBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    flex: 1,
+    height: 46,
     borderRadius: 14,
-    borderWidth: 1,
-    borderColor: BRAND.border,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    alignItems: "center",
+    justifyContent: "center",
   },
-  modalBtnGhost: { backgroundColor: "rgba(255,255,255,0.02)" },
-  modalBtnPrimary: { backgroundColor: BRAND.navy, borderColor: "rgba(255,255,255,0.14)" },
-  modalBtnText: { color: BRAND.cream, fontWeight: "900" },
-  modalBtnTextPrimary: { color: BRAND.cream, fontWeight: "900" },
+  modalBtnGhost: {
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+  },
+  modalBtnGhostText: { color: "white", fontWeight: "900" },
+
+  modalBtnPrimary: { backgroundColor: BRAND.cream },
+  modalBtnPrimaryText: { color: BRAND.navy, fontWeight: "900" },
+
+  clearKeyBtn: { alignSelf: "flex-start", paddingVertical: 6, paddingHorizontal: 2 },
+  clearKeyText: { color: "rgba(255,255,255,0.60)", fontWeight: "800", fontSize: 12 },
 });

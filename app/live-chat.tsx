@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { Stack, useRouter } from "expo-router";
 import {
   View,
   Text,
@@ -12,6 +13,7 @@ import {
   ActivityIndicator,
   Keyboard,
   RefreshControl,
+  BackHandler,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { getOrCreateSession, liveChatHistory, liveChatSend } from "../src/api";
@@ -47,8 +49,14 @@ function SkeletonBubble({ mine }: { mine?: boolean }) {
 }
 
 export default function LiveChat() {
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const safeBottom = Math.max(insets.bottom, 12);
+
+  const goHome = useCallback(() => {
+    // Replace so users can't go back into prior chat screens / cached sessions.
+    router.replace("/");
+  }, [router]);
 
   const [keyboardOpen, setKeyboardOpen] = useState(false);
 
@@ -73,6 +81,17 @@ export default function LiveChat() {
       hide.remove();
     };
   }, []);
+
+  // Android hardware back should go Home (not back to prior chat screens)
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      goHome();
+      return true;
+    });
+    return () => sub.remove();
+  }, [goHome]);
+;
 
   const scrollToBottom = useCallback(() => {
     InteractionManager.runAfterInteractions(() => {
@@ -179,12 +198,28 @@ export default function LiveChat() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
+      <Stack.Screen
+        options={{
+          headerShown: false,
+          // Prevent swipe-back (iOS) into previous screens where cached chat could appear.
+          gestureEnabled: false,
+        }}
+      />
       <KeyboardAvoidingView
         style={styles.safe}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? IOS_KEYBOARD_OFFSET : 0}
       >
         <View style={styles.header}>
+          <Pressable
+            onPress={goHome}
+            hitSlop={10}
+            style={({ pressed }) => [styles.headerBack, pressed && { opacity: 0.88, transform: [{ scale: 0.99 }] }]}
+          >
+            <Text style={styles.headerBackIcon}>←</Text>
+            <Text style={styles.headerBackText}>Home</Text>
+          </Pressable>
+
           <View style={{ flex: 1 }}>
             <Text style={styles.title}>Live chat with Vinnies</Text>
             <Text style={styles.sub}>You are chatting with Vinnies</Text>
@@ -282,6 +317,20 @@ export default function LiveChat() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: BRAND.bg },
+
+  headerBack: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.10)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+  },
+  headerBackIcon: { fontSize: 18, lineHeight: 18, color: BRAND.cream, marginTop: -1 },
+  headerBackText: { color: BRAND.cream, fontWeight: "900", letterSpacing: 0.2, fontSize: 14 },
 
   header: {
     paddingHorizontal: 14,

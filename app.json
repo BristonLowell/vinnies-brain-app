@@ -12,14 +12,14 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.vinnies.vinniesbrain",
-      "buildNumber": "59",
+      "buildNumber": "60",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
       "package": "com.brizzalicious.vinniesbrainapp",
-      "versionCode": 10,
+      "versionCode": 11,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundColor": "#000000",

@@ -15,6 +15,7 @@ import {
   Keyboard,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getOrCreateSession, getSavedAdminKey, saveAdminKey, clearAdminKey } from "../src/api";
 import { hasProEntitlement } from "../src/billing"; // ✅ NEW: static import (no dynamic import)
 
@@ -27,6 +28,17 @@ const BRAND = {
   muted: "rgba(255,255,255,0.70)",
   faint: "rgba(255,255,255,0.45)",
 };
+
+const NEXT_SESSION_KEY = "vinniesbrain_next_session_id";
+
+function makeSessionId() {
+  // Prefer crypto.randomUUID if available; fall back to a reasonably-unique string.
+  // Session IDs are not security-sensitive; they just need to be unique enough.
+  const anyCrypto: any = (globalThis as any).crypto;
+  if (anyCrypto && typeof anyCrypto.randomUUID === "function") return anyCrypto.randomUUID();
+  const rnd = () => Math.random().toString(16).slice(2);
+  return `sess_${Date.now().toString(16)}_${rnd()}_${rnd()}`;
+}
 
 const VINNIES_LOGO_URI =
   "https://images.squarespace-cdn.com/content/v1/661d985f1ab48c261e33cff9/584e4ae4-e0ca-4dd5-abb7-5944ac019238/VINNIES%2BLogo%2Bwith%2Bnew%2Brivets%281%29.png";
@@ -110,6 +122,11 @@ export default function Welcome() {
     try {
       const ok = await hasProEntitlement();
       if (ok) {
+        // ✅ Force a brand-new troubleshooting session every time the user taps Start Troubleshooting
+        const newSid = makeSessionId();
+        try {
+          await AsyncStorage.setItem(NEXT_SESSION_KEY, newSid);
+        } catch {}
         router.push({ pathname: "/year", params: { new: "1" } });
       } else {
         router.push({ pathname: "/paywall", params: { redirect: "/year" } });
@@ -200,30 +217,36 @@ export default function Welcome() {
 
             <TextInput
               value={adminKeyInput}
-              onChangeText={(t) => {
-                setAdminKeyInput(t);
-                if (adminErr) setAdminErr("");
-              }}
-              placeholder="ADMIN_API_KEY"
-              placeholderTextColor="rgba(255,255,255,0.45)"
+              onChangeText={setAdminKeyInput}
+              placeholder="Admin key"
+              placeholderTextColor={BRAND.faint}
               autoCapitalize="none"
               autoCorrect={false}
-              secureTextEntry
               style={styles.modalInput}
-              editable={!adminSaving}
-              returnKeyType="done"
               onSubmitEditing={onSaveAndGo}
             />
 
             {!!adminErr && <Text style={styles.modalErr}>{adminErr}</Text>}
 
-            <View style={styles.modalBtnsRow}>
+            <View style={styles.modalRow}>
               <Pressable
                 onPress={() => setAdminModalOpen(false)}
-                disabled={adminSaving}
-                style={({ pressed }) => [styles.modalBtn, styles.modalBtnGhost, pressed && { opacity: 0.9 }]}
+                style={({ pressed }) => [styles.modalBtn, pressed && { opacity: 0.9 }]}
               >
-                <Text style={styles.modalBtnGhostText}>Cancel</Text>
+                <Text style={styles.modalBtnText}>Cancel</Text>
+              </Pressable>
+
+              <Pressable
+                onPress={onClearKey}
+                disabled={adminSaving}
+                style={({ pressed }) => [
+                  styles.modalBtn,
+                  styles.modalBtnGhost,
+                  pressed && { opacity: 0.9 },
+                  adminSaving && { opacity: 0.6 },
+                ]}
+              >
+                <Text style={styles.modalBtnText}>Clear</Text>
               </Pressable>
 
               <Pressable
@@ -232,17 +255,13 @@ export default function Welcome() {
                 style={({ pressed }) => [
                   styles.modalBtn,
                   styles.modalBtnPrimary,
-                  pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] },
+                  pressed && { opacity: 0.9 },
                   adminSaving && { opacity: 0.6 },
                 ]}
               >
-                <Text style={styles.modalBtnPrimaryText}>{adminSaving ? "Saving…" : "Continue"}</Text>
+                {adminSaving ? <ActivityIndicator /> : <Text style={styles.modalBtnTextPrimary}>Continue</Text>}
               </Pressable>
             </View>
-
-            <Pressable onPress={onClearKey} disabled={adminSaving} style={styles.clearKeyBtn}>
-              <Text style={styles.clearKeyText}>Clear saved key</Text>
-            </Pressable>
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -253,146 +272,111 @@ export default function Welcome() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: BRAND.bg },
 
-  // ✅ moved inward: easier to click (more space from corner)
   gearBtn: {
     position: "absolute",
-    top: 22,
-    right: 22,
+    top: 10,
+    right: 12,
     zIndex: 10,
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: "rgba(255,255,255,0.10)",
-    borderWidth: 1,
+    backgroundColor: BRAND.surface,
     borderColor: BRAND.border,
-    alignItems: "center",
-    justifyContent: "center",
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
-  gearText: { fontSize: 20 },
+  gearText: { fontSize: 18 },
 
   bgGlowTop: {
     position: "absolute",
-    top: -150,
-    left: -110,
-    width: 360,
-    height: 360,
-    borderRadius: 999,
-    backgroundColor: "rgba(4,53,83,0.25)",
+    top: -120,
+    left: -120,
+    width: 300,
+    height: 300,
+    borderRadius: 160,
+    backgroundColor: "rgba(4,53,83,0.35)",
   },
   bgGlowBottom: {
     position: "absolute",
-    bottom: -170,
-    right: -130,
-    width: 460,
-    height: 460,
-    borderRadius: 999,
-    backgroundColor: "rgba(241,238,219,0.06)",
+    bottom: -160,
+    right: -160,
+    width: 340,
+    height: 340,
+    borderRadius: 180,
+    backgroundColor: "rgba(4,53,83,0.25)",
   },
 
-  container: {
-    flex: 1,
-    paddingHorizontal: 18,
-    paddingTop: 20,
-    paddingBottom: 18,
-    justifyContent: "center",
-    gap: 16,
-  },
+  container: { flex: 1, paddingHorizontal: 18, justifyContent: "center" },
 
-  // ✅ stretch so logo can be full width of the same content area
-  brandWrap: { gap: 10, marginBottom: 6, alignItems: "stretch" },
-  brandText: { alignItems: "center", gap: 6 },
-
-  // ✅ no background box; takes full available width
+  brandWrap: { alignItems: "center", marginBottom: 18 },
   logoWrap: {
-    height: 110,
     width: "100%",
-    alignItems: "center",
+    height: 130,
     justifyContent: "center",
-    paddingHorizontal: 0,
+    alignItems: "center",
   },
-  // Full-width logo (no background box)
-  logo: { width: "100%", height: 90 },
+  logo: { width: "100%", height: "100%" },
 
-  title: { color: "white", fontSize: 34, fontWeight: "900", letterSpacing: -0.3 },
-  subtitle: { color: BRAND.muted, fontSize: 14, textAlign: "center" },
+  brandText: { alignItems: "center", marginTop: 6 },
+  title: { color: BRAND.cream, fontSize: 34, fontWeight: "900", letterSpacing: 0.3 },
+  subtitle: { color: BRAND.muted, marginTop: 4, fontWeight: "700" },
 
   card: {
+    marginTop: 10,
+    backgroundColor: BRAND.surface,
+    borderColor: BRAND.border,
+    borderWidth: 1,
     borderRadius: 18,
     padding: 16,
-    backgroundColor: BRAND.surface,
-    borderWidth: 1,
-    borderColor: BRAND.border,
-    gap: 12,
   },
-  cardTitle: { color: BRAND.cream, fontSize: 16, fontWeight: "900" },
+  cardTitle: { color: BRAND.cream, fontWeight: "900", marginBottom: 10, fontSize: 16 },
 
   primaryBtn: {
-    height: 52,
+    backgroundColor: BRAND.navy,
     borderRadius: 16,
-    backgroundColor: BRAND.cream,
-    alignItems: "center",
-    justifyContent: "center",
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
   },
-  primaryBtnInner: { flexDirection: "row", gap: 10, alignItems: "center" },
-  primaryBtnText: { color: BRAND.navy, fontWeight: "900", fontSize: 15 },
+  primaryBtnInner: { alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 10 },
+  primaryBtnText: { color: BRAND.cream, fontWeight: "900", fontSize: 16 },
 
-  microHint: { marginTop: 2, color: BRAND.faint, fontSize: 11, lineHeight: 15 },
+  microHint: { color: BRAND.muted, marginTop: 12, textAlign: "center", fontWeight: "700" },
 
-  // Modal styles
-  modalBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.55)",
-  },
-  modalCenter: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 18,
-  },
+  modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)" },
+  modalCenter: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, justifyContent: "center" },
   modalCard: {
-    width: "100%",
-    maxWidth: 420,
+    marginHorizontal: 18,
+    backgroundColor: "#0C1A26",
     borderRadius: 18,
     padding: 16,
-    backgroundColor: "#0B0F14",
+    borderColor: BRAND.border,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-    gap: 10,
   },
-  modalTitle: { color: "white", fontWeight: "900", fontSize: 18 },
-  modalSub: { color: "rgba(255,255,255,0.70)", fontWeight: "700", fontSize: 12, marginTop: -2 },
-
+  modalTitle: { color: BRAND.cream, fontSize: 18, fontWeight: "900" },
+  modalSub: { color: BRAND.muted, marginTop: 4, marginBottom: 12, fontWeight: "700" },
   modalInput: {
-    height: 46,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderColor: BRAND.border,
+    borderWidth: 1,
     borderRadius: 14,
     paddingHorizontal: 12,
-    color: "white",
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    paddingVertical: 12,
+    color: BRAND.cream,
     fontWeight: "800",
   },
-
-  modalErr: { color: "rgba(239,68,68,0.95)", fontWeight: "900", marginTop: 2 },
-
-  modalBtnsRow: { flexDirection: "row", gap: 10, marginTop: 6 },
+  modalErr: { color: "#FFB4B4", marginTop: 10, fontWeight: "800" },
+  modalRow: { flexDirection: "row", gap: 10, marginTop: 14, justifyContent: "flex-end" },
   modalBtn: {
-    flex: 1,
-    height: 46,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  modalBtnGhost: {
-    backgroundColor: "rgba(255,255,255,0.08)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    borderColor: BRAND.border,
+    backgroundColor: "rgba(255,255,255,0.06)",
   },
-  modalBtnGhostText: { color: "white", fontWeight: "900" },
-
-  modalBtnPrimary: { backgroundColor: BRAND.cream },
-  modalBtnPrimaryText: { color: BRAND.navy, fontWeight: "900" },
-
-  clearKeyBtn: { alignSelf: "flex-start", paddingVertical: 6, paddingHorizontal: 2 },
-  clearKeyText: { color: "rgba(255,255,255,0.60)", fontWeight: "800", fontSize: 12 },
+  modalBtnGhost: { backgroundColor: "rgba(255,255,255,0.02)" },
+  modalBtnPrimary: { backgroundColor: BRAND.navy, borderColor: "rgba(255,255,255,0.14)" },
+  modalBtnText: { color: BRAND.cream, fontWeight: "900" },
+  modalBtnTextPrimary: { color: BRAND.cream, fontWeight: "900" },
 });

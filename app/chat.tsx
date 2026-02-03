@@ -54,6 +54,7 @@ const INITIAL_ASSISTANT: ChatItem = {
 };
 
 const INPUT_BAR_EST_HEIGHT = 76;
+const NEXT_SESSION_KEY = "vinniesbrain_next_session_id";
 
 function initials(label: string) {
   const s = (label || "").trim();
@@ -212,12 +213,28 @@ export default function Chat() {
   }, []);
 
   // Load the session and restore chat items for that session if present.
+  // If the user just tapped "Start Troubleshooting", we force a brand-new session id.
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
       try {
-        const sid = await getOrCreateSession(); // ✅ reuse current active session
+        // ✅ New-session flow (set by index.tsx)
+        try {
+          const forced = await AsyncStorage.getItem(NEXT_SESSION_KEY);
+          if (forced) {
+            await AsyncStorage.removeItem(NEXT_SESSION_KEY);
+            if (!cancelled) {
+              setSessionId(forced);
+              setItems([INITIAL_ASSISTANT]);
+              setShowEscalate(false);
+            }
+            return;
+          }
+        } catch {}
+
+        // ✅ Default: reuse current active session (resume)
+        const sid = await getOrCreateSession();
         if (cancelled) return;
 
         setSessionId(sid);
@@ -380,9 +397,9 @@ export default function Chat() {
             <Pressable
               onPress={goHome}
               hitSlop={10}
-              style={({ pressed }) => [styles.headerBack, pressed && { opacity: 0.85 }]}
+              style={({ pressed }) => [styles.headerBack, pressed && { opacity: 0.88, transform: [{ scale: 0.99 }] }]}
             >
-              <Text style={styles.headerBackIcon}>‹</Text>
+              <Text style={styles.headerBackIcon}>←</Text>
               <Text style={styles.headerBackText}>Home</Text>
             </Pressable>
           ),
@@ -512,110 +529,127 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.10)",
     borderWidth: 1,
-    borderColor: BRAND.border,
+    borderColor: "rgba(255,255,255,0.14)",
+    shadowColor: "#000",
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
   },
-  headerBackIcon: { color: BRAND.cream, fontSize: 22, lineHeight: 22, fontWeight: "900" },
-  headerBackText: { color: BRAND.cream, fontSize: 14, fontWeight: "800" },
+  headerBackIcon: {
+    fontSize: 18,
+    lineHeight: 18,
+    color: BRAND.cream,
+    marginTop: -1,
+  },
+  headerBackText: {
+    color: BRAND.cream,
+    fontWeight: "900",
+    letterSpacing: 0.2,
+    fontSize: 14,
+  },
 
-  listContent: { paddingHorizontal: 14, paddingTop: 14, paddingBottom: 10, gap: 10, flexGrow: 1 },
+  listContent: {
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 18,
+  },
 
-  row: { flexDirection: "row", alignItems: "flex-end", gap: 10 },
+  row: { flexDirection: "row", alignItems: "flex-end", marginBottom: 10 },
   rowLeft: { justifyContent: "flex-start" },
   rowRight: { justifyContent: "flex-end" },
 
   avatar: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: "rgba(241,238,219,0.10)",
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "rgba(255,255,255,0.08)",
     borderWidth: 1,
-    borderColor: "rgba(241,238,219,0.20)",
+    borderColor: BRAND.border,
     alignItems: "center",
     justifyContent: "center",
+    marginRight: 8,
   },
-  avatarText: { color: BRAND.cream, fontSize: 11, fontWeight: "900" },
+  avatarText: { color: BRAND.cream, fontWeight: "900" },
 
-  bubble: { maxWidth: "82%", paddingVertical: 10, paddingHorizontal: 12, borderRadius: 18, borderWidth: 1 },
-  aiBubble: { backgroundColor: "rgba(255,255,255,0.05)", borderColor: BRAND.border },
-  userBubble: { backgroundColor: BRAND.navy, borderColor: "rgba(241,238,219,0.18)" },
-
-  clarifyingQuestion: { fontSize: 15, lineHeight: 20, fontWeight: "900", color: BRAND.cream, marginBottom: 8 },
+  bubble: {
+    maxWidth: "82%",
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: BRAND.border,
+  },
+  userBubble: { backgroundColor: "rgba(4,53,83,0.35)" },
+  aiBubble: { backgroundColor: BRAND.surface },
 
   bubbleText: { fontSize: 15, lineHeight: 20 },
-  aiText: { color: BRAND.text },
   userText: { color: BRAND.cream, fontWeight: "700" },
+  aiText: { color: BRAND.text, fontWeight: "700" },
 
-  typingBubble: { flexDirection: "row", alignItems: "center", gap: 8 },
+  clarifyingQuestion: { color: BRAND.cream, fontWeight: "900", marginBottom: 6 },
+
+  typingBubble: { flexDirection: "row", alignItems: "center", gap: 10 },
   typingText: { color: BRAND.muted, fontWeight: "800" },
 
   checkpointCard: {
     marginTop: 10,
-    padding: 10,
-    borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderColor: "rgba(255,255,255,0.08)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    borderRadius: 14,
+    padding: 10,
   },
-  checkpointTitle: { color: BRAND.cream, fontWeight: "900", fontSize: 13, marginBottom: 2 },
-  checkpointSection: { marginTop: 6 },
-  checkpointLabel: { color: BRAND.muted, fontWeight: "900", fontSize: 12, marginBottom: 2 },
-  checkpointItem: { color: BRAND.text, fontSize: 12, lineHeight: 16 },
+  checkpointTitle: { color: BRAND.cream, fontWeight: "900", marginBottom: 8 },
+  checkpointSection: { marginBottom: 8 },
+  checkpointLabel: { color: BRAND.muted, fontWeight: "900", marginBottom: 4 },
+  checkpointItem: { color: BRAND.text, fontWeight: "700", marginBottom: 2 },
 
   escalate: {
     marginHorizontal: 14,
-    marginTop: 4,
     marginBottom: 10,
-    padding: 14,
-    borderRadius: 16,
-    backgroundColor: "rgba(4,53,83,0.22)",
+    backgroundColor: "rgba(4,53,83,0.50)",
+    borderColor: "rgba(255,255,255,0.14)",
     borderWidth: 1,
-    borderColor: "rgba(241,238,219,0.18)",
-    alignItems: "flex-start",
+    borderRadius: 18,
+    padding: 14,
   },
-  escalateText: { color: BRAND.cream, fontWeight: "900", fontSize: 15 },
-  escalateSub: { marginTop: 4, color: BRAND.muted, fontSize: 12 },
+  escalateText: { color: BRAND.cream, fontWeight: "900", fontSize: 16 },
+  escalateSub: { color: BRAND.muted, marginTop: 6, fontWeight: "800" },
 
-  inputWrap: {
-    paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 10,
-    borderTopWidth: 1,
-    borderTopColor: BRAND.border,
-    backgroundColor: BRAND.bg,
-  },
+  inputWrap: { paddingHorizontal: 14 },
   inputCard: {
     flexDirection: "row",
+    alignItems: "flex-end",
     gap: 10,
     padding: 10,
     borderRadius: 18,
-    backgroundColor: BRAND.surface,
     borderWidth: 1,
     borderColor: BRAND.border,
-    alignItems: "flex-end",
+    backgroundColor: "rgba(255,255,255,0.06)",
   },
   input: {
     flex: 1,
-    color: "white",
     minHeight: 44,
-    maxHeight: 130,
-    fontSize: 15,
-    lineHeight: 20,
-    paddingTop: 10,
-    paddingBottom: 10,
+    maxHeight: 140,
+    color: BRAND.cream,
+    fontWeight: "800",
+    paddingHorizontal: 8,
+    paddingVertical: 10,
   },
   sendBtn: {
-    height: 44,
-    paddingHorizontal: 16,
+    backgroundColor: BRAND.navy,
     borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: BRAND.cream,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
   },
-  sendBtnDisabled: { backgroundColor: "rgba(241,238,219,0.35)" },
-  sendText: { color: BRAND.navy, fontWeight: "900" },
+  sendBtnDisabled: { opacity: 0.5 },
+  sendText: { color: BRAND.cream, fontWeight: "900" },
 });

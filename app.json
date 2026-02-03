@@ -19,7 +19,7 @@
     },
     "android": {
       "package": "com.brizzalicious.vinniesbrainapp",
-      "versionCode": 9,
+      "versionCode": 10,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundColor": "#000000",

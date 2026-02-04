@@ -212,10 +212,9 @@ export default function Chat() {
           if (forceNew) await AsyncStorage.removeItem(FORCE_NEW_SESSION_KEY);
         } catch {}
 
-        // ✅ CRITICAL FIX:
-        // If forceNew is true, explicitly request a fresh server session.
+        // ✅ CRITICAL FIX: if forceNew, create a NEW server session
         const sid = forceNew
-          ? await getOrCreateSession({ forceNew: true } as any)
+          ? await getOrCreateSession({ forceNew: true })
           : await getOrCreateSession();
 
         if (cancelled) return;
@@ -223,7 +222,6 @@ export default function Chat() {
         setSessionId(sid);
 
         if (forceNew) {
-          // Start clean (and do not restore old cached messages)
           setItems([INITIAL_ASSISTANT]);
           setShowEscalate(false);
           return;

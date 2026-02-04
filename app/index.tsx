@@ -88,14 +88,11 @@ export default function Welcome() {
   const [adminErr, setAdminErr] = useState("");
 
   useEffect(() => {
-    (async () => {
-      try {
-        await getOrCreateSession();
-      } finally {
-        setReady(true);
-      }
-    })();
-  }, []);
+  // Don’t hit /v1/sessions on app launch.
+  // We’ll create a fresh session when the user taps Start Troubleshooting.
+  setReady(true);
+}, []);
+
 
   const subtitle = useMemo(() => "Guided troubleshooting for Airstreams (2000–2026).", []);
 
@@ -153,8 +150,18 @@ export default function Welcome() {
       const ok = await hasProEntitlement();
       if (ok) {
         await forceFreshTroubleshootingSession();
+
+        // Create the server session only when the user starts
+        try {
+          await getOrCreateSession();
+        } catch {
+          // If backend is temporarily down, still let them proceed;
+          // chat/year page can retry or show an error later.
+        }
+
         router.push({ pathname: "/year", params: { new: "1" } });
       } else {
+
         router.push({ pathname: "/paywall", params: { redirect: "/year" } });
       }
     } finally {

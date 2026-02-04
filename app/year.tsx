@@ -12,16 +12,20 @@ import {
   NativeScrollEvent,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getOrCreateSession, setContext } from "../src/api";
 
 const ITEM_H = 44;
 const VISIBLE_ITEMS = 7; // odd number looks best
 const LIST_H = ITEM_H * VISIBLE_ITEMS;
 
+// Must match index.tsx
+const FORCE_NEW_SESSION_KEY = "vinniesbrain_force_new_session";
+
 export default function Year() {
   const router = useRouter();
   const params = useLocalSearchParams<{ new?: string }>();
-  const startFresh = params?.new === "1";
+  const startFreshFromRoute = params?.new === "1";
 
   const years = useMemo(() => Array.from({ length: 2026 - 2000 + 1 }, (_, i) => 2000 + i), []);
   const defaultYear = 2018;
@@ -50,13 +54,31 @@ export default function Year() {
 
     setLoading(true);
 
+    // Force new session if either:
+    // - the route says ?new=1
+    // - AsyncStorage flag is set by the Home screen
+    let forceNew = startFreshFromRoute;
+    try {
+      const flag = await AsyncStorage.getItem(FORCE_NEW_SESSION_KEY);
+      if (flag === "1") forceNew = true;
+    } catch {
+      // ignore
+    }
+
     let sid = "";
     try {
-      // ✅ Start Troubleshooting must create a brand-new session
-      sid = await getOrCreateSession({ forceNew: startFresh });
+      // Create (or reuse) server session here
+      sid = await getOrCreateSession({ forceNew });
     } catch (e) {
       console.log("getOrCreateSession failed:", e);
-      // still navigate; chat can create session again
+      // still navigate; chat can create session again (or show backend error)
+    } finally {
+      // Clear the force-new flag so it only affects the next run
+      try {
+        await AsyncStorage.removeItem(FORCE_NEW_SESSION_KEY);
+      } catch {
+        // ignore
+      }
     }
 
     // IMPORTANT: never block navigation on setContext

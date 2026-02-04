@@ -212,12 +212,18 @@ export default function Chat() {
           if (forceNew) await AsyncStorage.removeItem(FORCE_NEW_SESSION_KEY);
         } catch {}
 
-        const sid = await getOrCreateSession();
+        // ✅ CRITICAL FIX:
+        // If forceNew is true, explicitly request a fresh server session.
+        const sid = forceNew
+          ? await getOrCreateSession({ forceNew: true } as any)
+          : await getOrCreateSession();
+
         if (cancelled) return;
 
         setSessionId(sid);
 
         if (forceNew) {
+          // Start clean (and do not restore old cached messages)
           setItems([INITIAL_ASSISTANT]);
           setShowEscalate(false);
           return;
@@ -373,7 +379,7 @@ export default function Chat() {
           title: "",
           headerShadowVisible: false,
           headerStyle: {
-            backgroundColor: BRAND.bg, // helps avoid extra line/box effects
+            backgroundColor: BRAND.bg,
           },
           headerTintColor: BRAND.cream,
           gestureEnabled: false,
@@ -467,9 +473,7 @@ export default function Chat() {
             <Text style={styles.escalateText}>Email Vinnies</Text>
             <Text style={styles.escalateSub}>
               {businessHours === false
-                ? `After hours — we’ll attach your chat when you submit.${
-                    nextOpen ? ` Next open: ${fmtLocal(nextOpen)}` : ""
-                  }`
+                ? `After hours — we’ll attach your chat when you submit.${nextOpen ? ` Next open: ${fmtLocal(nextOpen)}` : ""}`
                 : "We’ll attach your troubleshooting history when you submit."}
             </Text>
           </Pressable>
@@ -520,11 +524,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 14,
-    overflow: "hidden", // helps avoid “double” edges
+    overflow: "hidden",
     backgroundColor: "rgba(255,255,255,0.10)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.14)",
-    // ✅ removed shadow/elevation (this was creating the “second box” look)
   },
   headerBackIcon: {
     fontSize: 18,

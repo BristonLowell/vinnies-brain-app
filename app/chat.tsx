@@ -146,8 +146,6 @@ export default function Chat() {
   const params = useLocalSearchParams<{ year?: string; category?: string }>();
   const year = params.year ? Number(params.year) : undefined;
 
-  const [keyboardOpen, setKeyboardOpen] = useState(false);
-
   const [sessionId, setSessionId] = useState("");
   const [items, setItems] = useState<ChatItem[]>([INITIAL_ASSISTANT]);
   const [text, setText] = useState("");
@@ -160,16 +158,10 @@ export default function Chat() {
   const listRef = useRef<FlatList<ChatItem>>(null);
   const inputRef = useRef<TextInput>(null);
 
-  const ITEMS_KEY = useMemo(() => (sessionId ? `vinniesbrain_chat_items_${sessionId}` : ""), [sessionId]);
-
-  useEffect(() => {
-    const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardOpen(true));
-    const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardOpen(false));
-    return () => {
-      show.remove();
-      hide.remove();
-    };
-  }, []);
+  const ITEMS_KEY = useMemo(
+    () => (sessionId ? `vinniesbrain_chat_items_${sessionId}` : ""),
+    [sessionId]
+  );
 
   useEffect(() => {
     if (Platform.OS !== "android") return;
@@ -207,13 +199,12 @@ export default function Chat() {
     };
   }, []);
 
-  // ✅ Updated: honor FORCE_NEW_SESSION_KEY
+  // ✅ honor FORCE_NEW_SESSION_KEY and restore cached messages when possible
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
       try {
-        // If Home requested a clean start, do NOT restore old cached messages.
         let forceNew = false;
         try {
           const flag = await AsyncStorage.getItem(FORCE_NEW_SESSION_KEY);
@@ -232,7 +223,6 @@ export default function Chat() {
           return;
         }
 
-        // Normal resume: load saved items (if any)
         try {
           const raw = await AsyncStorage.getItem(`vinniesbrain_chat_items_${sid}`);
           if (raw) {
@@ -249,6 +239,7 @@ export default function Chat() {
         setItems([INITIAL_ASSISTANT]);
         setShowEscalate(false);
       } catch {
+        // If session creation fails at launch, user can still type; we’ll create on first send.
         setItems([INITIAL_ASSISTANT]);
         setShowEscalate(false);
       }
@@ -268,7 +259,8 @@ export default function Chat() {
     })();
   }, [ITEMS_KEY, items]);
 
-  const canSend = useMemo(() => !sending && text.trim().length > 0 && !!sessionId, [sending, text, sessionId]);
+  // ✅ DO NOT gate Send on sessionId (TestFlight can fail first session call)
+  const canSend = useMemo(() => !sending && text.trim().length > 0, [sending, text]);
 
   const userTurns = useMemo(() => items.filter((x) => x.role === "user").length, [items]);
   const assistantTurns = useMemo(() => {
@@ -278,10 +270,7 @@ export default function Chat() {
 
   const escalationEligibleBySteps = userTurns >= 2 && assistantTurns >= 2;
 
-  async function sendAndAppend(message: string) {
-    const sid = sessionId;
-    if (!sid) return;
-
+  async function sendAndAppend(sid: string, message: string) {
     const res = await sendChat(sid, message, year);
 
     const usedArticles = (res as any).used_articles || [];
@@ -311,7 +300,7 @@ export default function Chat() {
 
   async function onSend() {
     const msg = text.trim();
-    if (!msg || sending || !sessionId) return;
+    if (!msg || sending) return;
 
     setSending(true);
     setText("");
@@ -319,7 +308,14 @@ export default function Chat() {
     setItems((prev) => [...prev, { role: "user", text: msg }]);
 
     try {
-      await sendAndAppend(msg);
+      // ✅ ensure we have a session id (create lazily if launch-time creation failed)
+      let sid = sessionId;
+      if (!sid) {
+        sid = await getOrCreateSession();
+        setSessionId(sid);
+      }
+
+      await sendAndAppend(sid, msg);
     } catch {
       setItems((prev) => [
         ...prev,
@@ -376,13 +372,15 @@ export default function Chat() {
           headerShown: true,
           title: "",
           headerShadowVisible: false,
-          headerStyle: { backgroundColor: BRAND.bg },
+          headerStyle: {
+            backgroundColor: BRAND.bg, // helps avoid extra line/box effects
+          },
           headerTintColor: BRAND.cream,
           gestureEnabled: false,
           headerLeft: () => (
             <Pressable
               onPress={goHome}
-              hitSlop={10}
+              hitSlop={12}
               style={({ pressed }) => [
                 styles.headerBack,
                 pressed && { opacity: 0.88, transform: [{ scale: 0.99 }] },
@@ -400,57 +398,56 @@ export default function Chat() {
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? 120 : 0}
       >
-        <Pressable onPress={Keyboard.dismiss} style={StyleSheet.absoluteFill} pointerEvents="box-none">
-          <View style={StyleSheet.absoluteFill} pointerEvents="none" />
-        </Pressable>
+        {/* ✅ tap-to-dismiss ONLY over the message list area */}
+        <Pressable style={{ flex: 1 }} onPress={Keyboard.dismiss} accessible={false}>
+          <FlatList
+            ref={listRef}
+            data={items}
+            keyExtractor={(_, i) => String(i)}
+            contentContainerStyle={[
+              styles.listContent,
+              { paddingBottom: styles.listContent.paddingBottom + INPUT_BAR_EST_HEIGHT + 16 + safeBottom },
+            ]}
+            keyboardShouldPersistTaps="always"
+            keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+            onScrollBeginDrag={Keyboard.dismiss}
+            onContentSizeChange={() => scrollToBottom(false)}
+            renderItem={({ item }) => {
+              const isUser = item.role === "user";
+              const cq = item.meta?.clarifyingQuestion?.trim();
+              const body = item.text;
 
-        <FlatList
-          ref={listRef}
-          data={items}
-          keyExtractor={(_, i) => String(i)}
-          contentContainerStyle={[
-            styles.listContent,
-            { paddingBottom: styles.listContent.paddingBottom + INPUT_BAR_EST_HEIGHT + 16 + safeBottom },
-          ]}
-          keyboardShouldPersistTaps="always"
-          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
-          onScrollBeginDrag={Keyboard.dismiss}
-          onContentSizeChange={() => scrollToBottom(false)}
-          renderItem={({ item }) => {
-            const isUser = item.role === "user";
-            const cq = item.meta?.clarifyingQuestion?.trim();
-            const body = item.text;
+              return (
+                <View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
+                  {!isUser && (
+                    <View style={styles.avatar}>
+                      <Text style={styles.avatarText}>{initials("VB")}</Text>
+                    </View>
+                  )}
 
-            return (
-              <View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
-                {!isUser && (
+                  <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
+                    {!isUser && !!cq && <Text style={styles.clarifyingQuestion}>{cq}</Text>}
+                    <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>{body}</Text>
+                    {!isUser && renderCheckpointSummary(item.meta?.checkpointSummary)}
+                  </View>
+                </View>
+              );
+            }}
+            ListFooterComponent={
+              sending ? (
+                <View style={[styles.row, styles.rowLeft, { marginTop: 2 }]}>
                   <View style={styles.avatar}>
                     <Text style={styles.avatarText}>{initials("VB")}</Text>
                   </View>
-                )}
-
-                <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
-                  {!isUser && !!cq && <Text style={styles.clarifyingQuestion}>{cq}</Text>}
-                  <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>{body}</Text>
-                  {!isUser && renderCheckpointSummary(item.meta?.checkpointSummary)}
+                  <View style={[styles.bubble, styles.aiBubble, styles.typingBubble]}>
+                    <ActivityIndicator />
+                    <Text style={styles.typingText}>Thinking…</Text>
+                  </View>
                 </View>
-              </View>
-            );
-          }}
-          ListFooterComponent={
-            sending ? (
-              <View style={[styles.row, styles.rowLeft, { marginTop: 2 }]}>
-                <View style={styles.avatar}>
-                  <Text style={styles.avatarText}>{initials("VB")}</Text>
-                </View>
-                <View style={[styles.bubble, styles.aiBubble, styles.typingBubble]}>
-                  <ActivityIndicator />
-                  <Text style={styles.typingText}>Thinking…</Text>
-                </View>
-              </View>
-            ) : null
-          }
-        />
+              ) : null
+            }
+          />
+        </Pressable>
 
         {showLiveChatCTA && (
           <Pressable
@@ -470,7 +467,9 @@ export default function Chat() {
             <Text style={styles.escalateText}>Email Vinnies</Text>
             <Text style={styles.escalateSub}>
               {businessHours === false
-                ? `After hours — we’ll attach your chat when you submit.${nextOpen ? ` Next open: ${fmtLocal(nextOpen)}` : ""}`
+                ? `After hours — we’ll attach your chat when you submit.${
+                    nextOpen ? ` Next open: ${fmtLocal(nextOpen)}` : ""
+                  }`
                 : "We’ll attach your troubleshooting history when you submit."}
             </Text>
           </Pressable>
@@ -521,14 +520,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 14,
+    overflow: "hidden", // helps avoid “double” edges
     backgroundColor: "rgba(255,255,255,0.10)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.14)",
-    shadowColor: "#000",
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 3,
+    // ✅ removed shadow/elevation (this was creating the “second box” look)
   },
   headerBackIcon: {
     fontSize: 18,

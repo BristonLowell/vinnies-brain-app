@@ -402,56 +402,55 @@ export default function Chat() {
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? 120 : 0}
       >
-        {/* ✅ tap-to-dismiss ONLY over the message list area */}
-        <Pressable style={{ flex: 1 }} onPress={Keyboard.dismiss} accessible={false}>
-          <FlatList
-            ref={listRef}
-            data={items}
-            keyExtractor={(_, i) => String(i)}
-            contentContainerStyle={[
-              styles.listContent,
-              { paddingBottom: styles.listContent.paddingBottom + INPUT_BAR_EST_HEIGHT + 16 + safeBottom },
-            ]}
-            keyboardShouldPersistTaps="always"
-            keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
-            onScrollBeginDrag={Keyboard.dismiss}
-            onContentSizeChange={() => scrollToBottom(false)}
-            renderItem={({ item }) => {
-              const isUser = item.role === "user";
-              const cq = item.meta?.clarifyingQuestion?.trim();
-              const body = item.text;
+        {/* Message list */}
+        <FlatList
+          ref={listRef}
+          data={items}
+          keyExtractor={(_, i) => String(i)}
+          contentContainerStyle={[
+            styles.listContent,
+            { paddingBottom: styles.listContent.paddingBottom + INPUT_BAR_EST_HEIGHT + 16 + safeBottom },
+          ]}
+          keyboardShouldPersistTaps="always"
+          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+          onTouchStart={Keyboard.dismiss}
+          onScrollBeginDrag={Keyboard.dismiss}
+          onContentSizeChange={() => scrollToBottom(false)}
+          renderItem={({ item }) => {
+            const isUser = item.role === "user";
+            const cq = item.meta?.clarifyingQuestion?.trim();
+            const body = item.text;
 
-              return (
-                <View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
-                  {!isUser && (
-                    <View style={styles.avatar}>
-                      <Text style={styles.avatarText}>{initials("VB")}</Text>
-                    </View>
-                  )}
-
-                  <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
-                    {!isUser && !!cq && <Text style={styles.clarifyingQuestion}>{cq}</Text>}
-                    <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>{body}</Text>
-                    {!isUser && renderCheckpointSummary(item.meta?.checkpointSummary)}
-                  </View>
-                </View>
-              );
-            }}
-            ListFooterComponent={
-              sending ? (
-                <View style={[styles.row, styles.rowLeft, { marginTop: 2 }]}>
+            return (
+              <View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
+                {!isUser && (
                   <View style={styles.avatar}>
                     <Text style={styles.avatarText}>{initials("VB")}</Text>
                   </View>
-                  <View style={[styles.bubble, styles.aiBubble, styles.typingBubble]}>
-                    <ActivityIndicator />
-                    <Text style={styles.typingText}>Thinking…</Text>
-                  </View>
+                )}
+
+                <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
+                  {!isUser && !!cq && <Text style={styles.clarifyingQuestion}>{cq}</Text>}
+                  <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>{body}</Text>
+                  {!isUser && renderCheckpointSummary(item.meta?.checkpointSummary)}
                 </View>
-              ) : null
-            }
-          />
-        </Pressable>
+              </View>
+            );
+          }}
+          ListFooterComponent={
+            sending ? (
+              <View style={[styles.row, styles.rowLeft, { marginTop: 2 }]}>
+                <View style={styles.avatar}>
+                  <Text style={styles.avatarText}>{initials("VB")}</Text>
+                </View>
+                <View style={[styles.bubble, styles.aiBubble, styles.typingBubble]}>
+                  <ActivityIndicator />
+                  <Text style={styles.typingText}>Thinking…</Text>
+                </View>
+              </View>
+            ) : null
+          }
+        />
 
         {showLiveChatCTA && (
           <Pressable
@@ -523,9 +522,9 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 14,
     overflow: "hidden",
+    // Use a single visual edge (some platforms render a second focus/outline over borders)
     backgroundColor: "rgba(255,255,255,0.10)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.14)",
+    borderWidth: 0,
   },
   headerBackIcon: {
     fontSize: 18,

@@ -19,7 +19,7 @@ const ITEM_H = 44;
 const VISIBLE_ITEMS = 7; // odd number looks best
 const LIST_H = ITEM_H * VISIBLE_ITEMS;
 
-// Must match index.tsx
+// ✅ must match index.tsx / chat.tsx
 const FORCE_NEW_SESSION_KEY = "vinniesbrain_force_new_session";
 
 export default function Year() {
@@ -54,31 +54,26 @@ export default function Year() {
 
     setLoading(true);
 
-    // Force new session if either:
-    // - the route says ?new=1
-    // - AsyncStorage flag is set by the Home screen
+    // ✅ force new session if either route param or AsyncStorage flag says so
     let forceNew = startFreshFromRoute;
+
     try {
       const flag = await AsyncStorage.getItem(FORCE_NEW_SESSION_KEY);
-      if (flag === "1") forceNew = true;
+      if (flag === "1") {
+        forceNew = true;
+        await AsyncStorage.removeItem(FORCE_NEW_SESSION_KEY);
+      }
     } catch {
       // ignore
     }
 
     let sid = "";
     try {
-      // Create (or reuse) server session here
+      // ✅ Create (or reuse) server session here
       sid = await getOrCreateSession({ forceNew });
     } catch (e) {
       console.log("getOrCreateSession failed:", e);
-      // still navigate; chat can create session again (or show backend error)
-    } finally {
-      // Clear the force-new flag so it only affects the next run
-      try {
-        await AsyncStorage.removeItem(FORCE_NEW_SESSION_KEY);
-      } catch {
-        // ignore
-      }
+      // still navigate; chat can create session again
     }
 
     // IMPORTANT: never block navigation on setContext

@@ -139,10 +139,6 @@ export default function Chat() {
   const insets = useSafeAreaInsets();
   const safeBottom = Math.max(insets.bottom, 12);
 
-  const goHome = useCallback(() => {
-    router.replace("/");
-  }, [router]);
-
   const params = useLocalSearchParams<{ year?: string; category?: string }>();
   const year = params.year ? Number(params.year) : undefined;
 
@@ -166,14 +162,36 @@ export default function Chat() {
     [sessionId]
   );
 
+  const confirmGoHome = useCallback(() => {
+    Alert.alert(
+      "Go to Home?",
+      "This will reset your troubleshooting progress for this issue.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Go Home",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              // Ensures next time user starts troubleshooting it creates a fresh server session
+              await AsyncStorage.setItem(FORCE_NEW_SESSION_KEY, "1");
+            } catch {}
+            router.replace("/");
+          },
+        },
+      ]
+    );
+  }, [router]);
+
   useEffect(() => {
     if (Platform.OS !== "android") return;
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-      goHome();
+      // ✅ confirm before resetting progress via hardware back
+      confirmGoHome();
       return true;
     });
     return () => sub.remove();
-  }, [goHome]);
+  }, [confirmGoHome]);
 
   // ✅ Android keyboard listeners (move input up slightly so it’s not hidden)
   useEffect(() => {
@@ -320,6 +338,10 @@ export default function Chat() {
     const msg = text.trim();
     if (!msg || sending) return;
 
+    // ✅ Close keyboard immediately
+    Keyboard.dismiss();
+    inputRef.current?.blur();
+
     setSending(true);
     setText("");
 
@@ -397,7 +419,7 @@ export default function Chat() {
           gestureEnabled: false,
           headerLeft: () => (
             <Pressable
-              onPress={goHome}
+              onPress={confirmGoHome}
               hitSlop={12}
               style={({ pressed }) => [
                 styles.headerBack,
@@ -499,8 +521,11 @@ export default function Chat() {
               paddingBottom: 10 + safeBottom,
               // ✅ small extra lift on Android while keyboard is open
               marginBottom: Platform.OS === "android" && androidKeyboardOpen ? 14 : 0,
+              // ✅ visually indicate disabled while sending
+              opacity: sending ? 0.75 : 1,
             },
           ]}
+          pointerEvents={sending ? "none" : "auto"} // ✅ disables all input interactions while thinking
         >
           <View style={styles.inputCard}>
             <TextInput
@@ -512,6 +537,7 @@ export default function Chat() {
               style={styles.input}
               multiline
               returnKeyType="send"
+              editable={!sending} // ✅ disable typing while AI is thinking
               onSubmitEditing={() => {
                 if (canSend) onSend();
               }}
@@ -520,14 +546,14 @@ export default function Chat() {
 
             <Pressable
               onPress={onSend}
-              disabled={!canSend}
+              disabled={!canSend || sending}
               style={({ pressed }) => [
                 styles.sendBtn,
-                !canSend && styles.sendBtnDisabled,
-                pressed && canSend && { opacity: 0.9, transform: [{ scale: 0.99 }] },
+                (!canSend || sending) && styles.sendBtnDisabled,
+                pressed && canSend && !sending && { opacity: 0.9, transform: [{ scale: 0.99 }] },
               ]}
             >
-              <Text style={styles.sendText}>Send</Text>
+              <Text style={styles.sendText}>{sending ? "…" : "Send"}</Text>
             </Pressable>
           </View>
         </View>
@@ -547,7 +573,6 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 14,
     overflow: "hidden",
-    // Use a single visual edge (some platforms render a second focus/outline over borders)
     backgroundColor: "rgba(255,255,255,0.10)",
     borderWidth: 0,
   },

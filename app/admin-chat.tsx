@@ -316,7 +316,7 @@ export default function AdminChat() {
         },
         body: JSON.stringify({
           conversation_id: conversationId,
-          message: body,
+          body: body,
         }),
       });
 

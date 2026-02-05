@@ -235,6 +235,11 @@ export default function PaywallScreen() {
               <Text style={styles.primaryCtaSub}>Cancel anytime</Text>
             </Pressable>
 
+            <Text style={styles.trialNote}>
+              Includes a 7-day free trial for new subscribers
+            </Text>
+
+
             {/* If you ever have multiple packages (monthly/annual), show them as secondary options */}
             {allPkgs.length > 1 ? (
               <View style={styles.otherPlans}>
@@ -397,4 +402,13 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   primaryBtnText: { color: "#043553", fontWeight: "900" },
+
+  trialNote: {
+  marginTop: 6,
+  color: "rgba(255,255,255,0.75)",
+  fontWeight: "700",
+  fontSize: 13,
+  textAlign: "center",
+},
+
 });

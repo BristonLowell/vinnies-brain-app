@@ -155,6 +155,9 @@ export default function Chat() {
   const [businessHours, setBusinessHours] = useState<boolean | null>(null);
   const [nextOpen, setNextOpen] = useState<string>("");
 
+  // ✅ Android keyboard visibility (helps lift input bar when keyboard is open)
+  const [androidKeyboardOpen, setAndroidKeyboardOpen] = useState(false);
+
   const listRef = useRef<FlatList<ChatItem>>(null);
   const inputRef = useRef<TextInput>(null);
 
@@ -171,6 +174,17 @@ export default function Chat() {
     });
     return () => sub.remove();
   }, [goHome]);
+
+  // ✅ Android keyboard listeners (move input up slightly so it’s not hidden)
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const show = Keyboard.addListener("keyboardDidShow", () => setAndroidKeyboardOpen(true));
+    const hide = Keyboard.addListener("keyboardDidHide", () => setAndroidKeyboardOpen(false));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
 
   const scrollToBottom = useCallback((animated = true) => {
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated }));
@@ -399,8 +413,10 @@ export default function Chat() {
 
       <KeyboardAvoidingView
         style={styles.safe}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 120 : 0}
+        // ✅ Android: padding works better for keeping the input visible
+        behavior={Platform.OS === "ios" ? "padding" : "padding"}
+        // ✅ slight lift on Android so the input isn’t buried by the keyboard
+        keyboardVerticalOffset={Platform.OS === "ios" ? 120 : 80}
       >
         {/* Message list */}
         <FlatList
@@ -476,7 +492,16 @@ export default function Chat() {
           </Pressable>
         )}
 
-        <View style={[styles.inputWrap, { paddingBottom: 10 + safeBottom }]}>
+        <View
+          style={[
+            styles.inputWrap,
+            {
+              paddingBottom: 10 + safeBottom,
+              // ✅ small extra lift on Android while keyboard is open
+              marginBottom: Platform.OS === "android" && androidKeyboardOpen ? 14 : 0,
+            },
+          ]}
+        >
           <View style={styles.inputCard}>
             <TextInput
               ref={inputRef}

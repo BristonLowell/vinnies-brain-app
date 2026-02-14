@@ -298,13 +298,17 @@ export default function Chat() {
   // ✅ DO NOT gate Send on sessionId (TestFlight can fail first session call)
   const canSend = useMemo(() => !sending && text.trim().length > 0, [sending, text]);
 
+  // Count turns
   const userTurns = useMemo(() => items.filter((x) => x.role === "user").length, [items]);
+
+  // assistantTurns excludes INITIAL_ASSISTANT
   const assistantTurns = useMemo(() => {
     const total = items.filter((x) => x.role === "assistant").length;
     return Math.max(0, total - 1);
   }, [items]);
 
-  const escalationEligibleBySteps = userTurns >= 2 && assistantTurns >= 2;
+  // ✅ NEW: only allow escalation CTAs after 3 AI replies (excluding the initial assistant message)
+  const escalationEligibleByAiPrompts = assistantTurns >= 3;
 
   async function sendAndAppend(sid: string, message: string) {
     const res = await sendChat(sid, message, year);
@@ -400,8 +404,12 @@ export default function Chat() {
     );
   }
 
-  const showLiveChatCTA = showEscalate && escalationEligibleBySteps && businessHours === true;
-  const showEmailCTA = showEscalate && escalationEligibleBySteps && businessHours !== true;
+  // ✅ NEW: show CTAs only if backend wants escalation AND user has reached 3 AI replies
+  const showEscalationCTAs = showEscalate && escalationEligibleByAiPrompts;
+
+  // ✅ NEW: During business hours show BOTH; otherwise Email only (once eligible)
+  const showLiveChatCTA = showEscalationCTAs && businessHours === true;
+  const showEmailCTA = showEscalationCTAs;
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>

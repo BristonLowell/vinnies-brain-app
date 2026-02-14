@@ -40,6 +40,19 @@ export default function SettingsScreen() {
         <Text style={styles.btnText}>Manage subscription</Text>
       </Pressable>
 
+      {/* New legal pages */}
+      <View style={styles.divider} />
+
+      <Text style={styles.sectionTitle}>Legal</Text>
+
+      <Pressable disabled={busy} onPress={() => router.push("/privacy")} style={styles.btn}>
+        <Text style={styles.btnText}>Privacy Policy</Text>
+      </Pressable>
+
+      <Pressable disabled={busy} onPress={() => router.push("/terms")} style={styles.btn}>
+        <Text style={styles.btnText}>Terms of Service</Text>
+      </Pressable>
+
       <Pressable disabled={busy} onPress={() => router.back()} style={[styles.btn, styles.ghost]}>
         <Text style={[styles.btnText, { color: "white" }]}>Back</Text>
       </Pressable>
@@ -53,6 +66,20 @@ const styles = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: "#071018", padding: 18, justifyContent: "center", gap: 12 },
   title: { color: "white", fontSize: 22, fontWeight: "900", textAlign: "center" },
   sub: { color: "rgba(255,255,255,0.7)", fontWeight: "700", textAlign: "center", marginBottom: 10 },
+
+  sectionTitle: {
+    color: "rgba(255,255,255,0.85)",
+    fontWeight: "900",
+    textAlign: "center",
+    marginTop: 6,
+    marginBottom: 2,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: "rgba(255,255,255,0.12)",
+    marginVertical: 6,
+  },
+
   btn: {
     height: 52,
     borderRadius: 16,

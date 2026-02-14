@@ -275,6 +275,16 @@ export async function registerOwnerPushToken(ownerId: string, expoPushToken: str
   });
 }
 
+// Call when user opens live chat to:
+// - create a system message: "We will be with you shortly."
+// - notify/admin-bump the conversation
+export async function liveChatOpened(sessionId: string) {
+  return await http<{ ok: boolean; conversation_id?: string }>("/v1/livechat/opened", {
+    body: { session_id: sessionId },
+  });
+}
+
+
 // ----------------------------
 // Admin: inbox + QC helpers
 // ----------------------------

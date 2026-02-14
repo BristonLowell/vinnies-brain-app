@@ -10,13 +10,12 @@ import {
   KeyboardAvoidingView,
   Platform,
   InteractionManager,
-  ActivityIndicator,
   Keyboard,
   RefreshControl,
   BackHandler,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { getOrCreateSession, liveChatHistory, liveChatSend } from "../src/api";
+import { getOrCreateSession, liveChatHistory, liveChatSend, liveChatOpened } from "../src/api";
 
 const BRAND = {
   bg: "#071018",
@@ -54,7 +53,6 @@ export default function LiveChat() {
   const safeBottom = Math.max(insets.bottom, 12);
 
   const goHome = useCallback(() => {
-    // Replace so users can't go back into prior chat screens / cached sessions.
     router.replace("/");
   }, [router]);
 
@@ -73,6 +71,9 @@ export default function LiveChat() {
   const pollTimerRef = useRef<any>(null);
   const lastSigRef = useRef<string>("");
 
+  // ✅ only call /v1/livechat/opened once per screen mount
+  const didOpenedRef = useRef(false);
+
   useEffect(() => {
     const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardOpen(true));
     const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardOpen(false));
@@ -82,7 +83,6 @@ export default function LiveChat() {
     };
   }, []);
 
-  // Android hardware back should go Home (not back to prior chat screens)
   useEffect(() => {
     if (Platform.OS !== "android") return;
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -91,7 +91,6 @@ export default function LiveChat() {
     });
     return () => sub.remove();
   }, [goHome]);
-;
 
   const scrollToBottom = useCallback(() => {
     InteractionManager.runAfterInteractions(() => {
@@ -120,7 +119,6 @@ export default function LiveChat() {
           setMessages(msgs);
           requestAnimationFrame(scrollToBottom);
         } else {
-          // still ensure CID stays in sync
           if (cid && cid !== conversationId) setConversationId(cid);
         }
 
@@ -148,10 +146,27 @@ export default function LiveChat() {
 
         setSessionId(sid);
 
+        // Load history first (so you see anything already there)
         await refresh(sid);
         if (cancelled) return;
 
         setReady(true);
+
+        // ✅ Call backend ONCE when live chat is opened:
+        // - inserts system message: "We will be with you shortly."
+        // - notifies / bumps admin
+        if (!didOpenedRef.current) {
+          didOpenedRef.current = true;
+          try {
+            const res = await liveChatOpened(sid);
+            if ((res as any)?.conversation_id) {
+              setConversationId(String((res as any).conversation_id));
+            }
+            await refresh(sid);
+          } catch {
+            // don't block UX
+          }
+        }
       } catch (e: any) {
         if (!cancelled) setError(String(e?.message ?? "Unable to start live chat."));
       } finally {
@@ -201,7 +216,6 @@ export default function LiveChat() {
       <Stack.Screen
         options={{
           headerShown: false,
-          // Prevent swipe-back (iOS) into previous screens where cached chat could appear.
           gestureEnabled: false,
         }}
       />
@@ -214,7 +228,10 @@ export default function LiveChat() {
           <Pressable
             onPress={goHome}
             hitSlop={10}
-            style={({ pressed }) => [styles.headerBack, pressed && { opacity: 0.88, transform: [{ scale: 0.99 }] }]}
+            style={({ pressed }) => [
+              styles.headerBack,
+              pressed && { opacity: 0.88, transform: [{ scale: 0.99 }] },
+            ]}
           >
             <Text style={styles.headerBackIcon}>←</Text>
             <Text style={styles.headerBackText}>Home</Text>
@@ -223,7 +240,9 @@ export default function LiveChat() {
           <View style={{ flex: 1 }}>
             <Text style={styles.title}>Live chat with Vinnies</Text>
             <Text style={styles.sub}>You are chatting with Vinnies</Text>
-            {!!conversationId && <Text style={styles.meta}>Conversation: {conversationId.slice(0, 8)}…</Text>}
+            {!!conversationId && (
+              <Text style={styles.meta}>Conversation: {conversationId.slice(0, 8)}…</Text>
+            )}
           </View>
 
           <Pressable
@@ -263,7 +282,10 @@ export default function LiveChat() {
             ref={listRef}
             data={messages}
             keyExtractor={(m) => m.id}
-            contentContainerStyle={[styles.list, { paddingBottom: INPUT_BAR_EST_HEIGHT + 16 + safeBottom }]}
+            contentContainerStyle={[
+              styles.list,
+              { paddingBottom: INPUT_BAR_EST_HEIGHT + 16 + safeBottom },
+            ]}
             keyboardShouldPersistTaps="handled"
             onContentSizeChange={() => scrollToBottom()}
             refreshControl={
@@ -275,9 +297,18 @@ export default function LiveChat() {
             }
             renderItem={({ item }) => {
               const mine = item.sender_role === "customer";
+              const isSystem = item.sender_role === "system";
+
               return (
-                <View style={[styles.bubble, mine ? styles.mine : styles.theirs]}>
-                  <Text style={styles.msgText}>{item.body}</Text>
+                <View
+                  style={[
+                    styles.bubble,
+                    mine ? styles.mine : isSystem ? styles.system : styles.theirs,
+                  ]}
+                >
+                  <Text style={[styles.msgText, isSystem ? styles.systemText : null]}>
+                    {item.body}
+                  </Text>
                 </View>
               );
             }}
@@ -306,7 +337,11 @@ export default function LiveChat() {
             multiline
             editable={ready && !loading}
           />
-          <Pressable style={[styles.btn, !canSend && styles.btnDisabled]} disabled={!canSend} onPress={send}>
+          <Pressable
+            style={[styles.btn, !canSend && styles.btnDisabled]}
+            disabled={!canSend}
+            onPress={send}
+          >
             <Text style={styles.btnText}>Send</Text>
           </Pressable>
         </View>
@@ -380,8 +415,18 @@ const styles = StyleSheet.create({
   list: { paddingHorizontal: 14, paddingVertical: 10, gap: 10, flexGrow: 1 },
 
   bubble: { maxWidth: "82%", padding: 12, borderRadius: 16, borderWidth: 1 },
+
   mine: { alignSelf: "flex-end", backgroundColor: BRAND.navy, borderColor: "rgba(241,238,219,0.18)" },
   theirs: { alignSelf: "flex-start", backgroundColor: "rgba(255,255,255,0.05)", borderColor: BRAND.border },
+
+  system: {
+    alignSelf: "center",
+    maxWidth: "92%",
+    backgroundColor: "rgba(241,238,219,0.10)",
+    borderColor: "rgba(241,238,219,0.22)",
+  },
+  systemText: { color: "rgba(241,238,219,0.95)", fontWeight: "900", textAlign: "center" },
+
   msgText: { color: BRAND.text, fontSize: 15, lineHeight: 20 },
 
   inputWrap: {

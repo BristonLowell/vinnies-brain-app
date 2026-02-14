@@ -12,6 +12,7 @@ import {
   Alert,
   InteractionManager,
   Keyboard,
+  ScrollView,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -78,7 +79,9 @@ export default function AdminChat() {
   const [error, setError] = useState<string>("");
 
   // AI history panel
-  const [showAi, setShowAi] = useState<boolean>(true);
+  // showAi = open/close panel
+  // aiExpanded = full transcript vs preview
+  const [showAi, setShowAi] = useState<boolean>(false);
   const [aiExpanded, setAiExpanded] = useState<boolean>(false);
   const [aiMessages, setAiMessages] = useState<AiMsg[]>([]);
   const [aiMeta, setAiMeta] = useState<AiMeta>({});
@@ -112,6 +115,7 @@ export default function AdminChat() {
         const data = (await r.json()) as AiHistoryResponse;
 
         const msgsRaw = Array.isArray(data?.messages) ? (data.messages as AiMsg[]) : [];
+
         // Ensure chronological order (oldest → newest) and make pairs read naturally (User → AI).
         const msgs = msgsRaw
           .map((m, i) => ({ ...m, __i: i }))
@@ -229,61 +233,79 @@ export default function AdminChat() {
     );
   }
 
-  const aiCountToShow = aiExpanded ? 60 : 12;
-  const aiSlice = aiMessages.length > aiCountToShow ? aiMessages.slice(-aiCountToShow) : aiMessages;
+  // Preview vs full transcript
+  const previewCount = 10;
+  const aiPreview =
+    aiMessages.length > previewCount ? aiMessages.slice(-previewCount) : aiMessages;
 
-  const isPinned = !!aiMeta?.active_tree_present && !!aiMeta?.active_article_id && !!aiMeta?.active_node_id;
+  // ✅ IMPORTANT: remove pinned/clarifying/pinned node UI entirely
+  // (We keep aiMeta in case you still use it elsewhere, but we do not render pinned info.)
 
   const AiHeader = (
     <View style={styles.aiWrap}>
       <View style={styles.aiTopRow}>
-        <Text style={styles.aiTitle}>AI History</Text>
+        <Text style={styles.aiTitle}>AI Chat (User ↔ AI)</Text>
 
         <View style={styles.aiTopBtns}>
-          {aiMessages.length > 12 && (
+          <Pressable
+            onPress={async () => {
+              // If opening, refresh once so it’s current
+              const next = !showAi;
+              setShowAi(next);
+              if (next && adminKey) {
+                await fetchAiHistory(adminKey);
+              }
+            }}
+            style={({ pressed }) => [styles.aiBtn, pressed && { opacity: 0.85 }]}
+          >
+            <Text style={styles.aiBtnText}>{showAi ? "Close" : "Open"}</Text>
+          </Pressable>
+
+          {showAi && aiMessages.length > previewCount && (
             <Pressable
               onPress={() => setAiExpanded((s) => !s)}
               style={({ pressed }) => [styles.aiBtn, pressed && { opacity: 0.85 }]}
             >
-              <Text style={styles.aiBtnText}>{aiExpanded ? "Show less" : "Show more"}</Text>
+              <Text style={styles.aiBtnText}>{aiExpanded ? "Preview" : "Full chat"}</Text>
             </Pressable>
           )}
-
-          <Pressable
-            onPress={() => setShowAi((s) => !s)}
-            style={({ pressed }) => [styles.aiBtn, pressed && { opacity: 0.85 }]}
-          >
-            <Text style={styles.aiBtnText}>{showAi ? "Hide" : "Show"}</Text>
-          </Pressable>
         </View>
       </View>
 
-      {isPinned ? (
-        <Text style={styles.aiPinned}>
-          Pinned node: {aiMeta.active_article_id} / {aiMeta.active_node_id}
-        </Text>
-      ) : (
-        <Text style={styles.aiSub}>No active tree pinned.</Text>
-      )}
-
-      {/* ✅ Removed the “Current question / clarifying question” box from admin view */}
       {aiLoading ? (
         <Text style={styles.aiSub}>Loading…</Text>
       ) : aiError ? (
         <Text style={styles.aiErr}>{aiError}</Text>
-      ) : !showAi ? null : aiMessages.length === 0 ? (
+      ) : !showAi ? (
+        <Text style={styles.aiSub}>Tap “Open” to view the full AI transcript.</Text>
+      ) : aiMessages.length === 0 ? (
         <Text style={styles.aiSub}>No AI messages saved yet.</Text>
       ) : (
-        <View style={styles.aiMsgs}>
-          {aiSlice.map((m, idx) => (
-            <View key={`${idx}-${m.created_at ?? ""}`} style={styles.aiMsgRow}>
-              <View style={styles.aiMsgHeader}>
-                <Text style={styles.aiRole}>{m.role === "assistant" ? "AI" : "User"}</Text>
-                {!!m.created_at && <Text style={styles.aiTime}>{fmt(m.created_at)}</Text>}
+        <View style={styles.aiTranscriptCard}>
+          <ScrollView
+            style={[
+              styles.aiScroll,
+              { maxHeight: aiExpanded ? 520 : 240 },
+            ]}
+            contentContainerStyle={{ paddingBottom: 10 }}
+            nestedScrollEnabled
+          >
+            {(aiExpanded ? aiMessages : aiPreview).map((m, idx) => (
+              <View key={`${idx}-${m.created_at ?? ""}`} style={styles.aiMsgRow}>
+                <View style={styles.aiMsgHeader}>
+                  <Text style={styles.aiRole}>{m.role === "assistant" ? "AI" : "User"}</Text>
+                  {!!m.created_at && <Text style={styles.aiTime}>{fmt(m.created_at)}</Text>}
+                </View>
+                <Text style={styles.aiText}>{m.text}</Text>
               </View>
-              <Text style={styles.aiText}>{m.text}</Text>
-            </View>
-          ))}
+            ))}
+
+            {!aiExpanded && aiMessages.length > previewCount ? (
+              <Text style={styles.aiHint}>
+                Showing last {previewCount}. Tap “Full chat” to view everything.
+              </Text>
+            ) : null}
+          </ScrollView>
         </View>
       )}
     </View>
@@ -293,12 +315,10 @@ export default function AdminChat() {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
 
-  const canSend = useMemo(() => draft.trim().length > 0 && !sending && !!adminKey && !!conversationId, [
-    draft,
-    sending,
-    adminKey,
-    conversationId,
-  ]);
+  const canSend = useMemo(
+    () => draft.trim().length > 0 && !sending && !!adminKey && !!conversationId,
+    [draft, sending, adminKey, conversationId]
+  );
 
   async function sendOwner() {
     const body = draft.trim();
@@ -491,7 +511,7 @@ const styles = StyleSheet.create({
   aiWrap: {
     paddingHorizontal: 12,
     paddingTop: 10,
-    paddingBottom: 8,
+    paddingBottom: 10,
     borderBottomWidth: 1,
     borderBottomColor: "rgba(255,255,255,0.10)",
   },
@@ -508,17 +528,34 @@ const styles = StyleSheet.create({
   },
   aiBtnText: { color: "rgba(255,255,255,0.92)", fontWeight: "900", fontSize: 12 },
 
-  aiPinned: { marginTop: 6, color: "rgba(241,238,219,0.80)", fontWeight: "900", fontSize: 12 },
   aiSub: { marginTop: 6, color: "rgba(255,255,255,0.55)", fontWeight: "700", fontSize: 12 },
   aiErr: { marginTop: 6, color: "rgba(255,90,90,0.95)", fontWeight: "800", fontSize: 12 },
 
-  aiMsgs: { marginTop: 8, gap: 8 },
-  aiMsgRow: {
-    padding: 10,
-    borderRadius: 14,
+  aiTranscriptCard: {
+    marginTop: 10,
+    borderRadius: 16,
     backgroundColor: "rgba(255,255,255,0.05)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.10)",
+    overflow: "hidden",
+  },
+  aiScroll: { paddingHorizontal: 10, paddingTop: 10 },
+  aiHint: {
+    marginTop: 10,
+    marginBottom: 2,
+    color: "rgba(255,255,255,0.50)",
+    fontWeight: "700",
+    fontSize: 12,
+    textAlign: "center",
+  },
+
+  aiMsgRow: {
+    padding: 10,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    marginBottom: 10,
   },
   aiMsgHeader: { flexDirection: "row", justifyContent: "space-between", gap: 10, marginBottom: 6 },
   aiRole: { color: "rgba(241,238,219,0.95)", fontWeight: "900", fontSize: 12 },

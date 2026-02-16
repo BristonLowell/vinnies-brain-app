@@ -14,6 +14,8 @@ import {
   StatusBar,
   Alert,
   BackHandler,
+  AppState,
+  type AppStateStatus,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -57,6 +59,12 @@ const INPUT_BAR_EST_HEIGHT = 76;
 
 // ✅ must match index.tsx
 const FORCE_NEW_SESSION_KEY = "vinniesbrain_force_new_session";
+
+// ✅ NEW: track last active so we can decide whether to reset after a full close
+const LAST_ACTIVE_TS_KEY = "vinniesbrain_last_active_ts";
+
+// ✅ NEW: if app was away longer than this, start fresh (10 minutes)
+const RESET_AFTER_MS = 10 * 60 * 1000;
 
 function initials(label: string) {
   const s = (label || "").trim();
@@ -230,6 +238,54 @@ export default function Chat() {
       cancelled = true;
     };
   }, []);
+
+  // ✅ NEW: Option A — reset if app was fully “away” (close/long background)
+  useEffect(() => {
+    let prevState: AppStateStatus = AppState.currentState;
+
+    const onChange = async (nextState: AppStateStatus) => {
+      try {
+        // when leaving active -> record last active timestamp
+        if (prevState === "active" && nextState.match(/inactive|background/)) {
+          await AsyncStorage.setItem(LAST_ACTIVE_TS_KEY, String(Date.now()));
+        }
+
+        // when coming back -> if away long enough, reset
+        if (prevState.match(/inactive|background/) && nextState === "active") {
+          const raw = await AsyncStorage.getItem(LAST_ACTIVE_TS_KEY);
+          const lastTs = raw ? Number(raw) : 0;
+
+          if (!lastTs || Date.now() - lastTs > RESET_AFTER_MS) {
+            // 1) force a new server session next time
+            await AsyncStorage.setItem(FORCE_NEW_SESSION_KEY, "1");
+
+            // 2) best-effort: clear cached items for current session (if we have one)
+            if (sessionId) {
+              await AsyncStorage.removeItem(`vinniesbrain_chat_items_${sessionId}`);
+            }
+
+            // 3) reset in-memory UI immediately
+            setSessionId("");
+            setItems([INITIAL_ASSISTANT]);
+            setShowEscalate(false);
+            setSending(false);
+            setText("");
+
+            // 4) send them home so the flow restarts cleanly
+            router.replace("/");
+          }
+        }
+      } catch {
+        // If anything fails, do nothing — never crash the app
+      } finally {
+        prevState = nextState;
+      }
+    };
+
+    const sub = AppState.addEventListener("change", onChange);
+    return () => sub.remove();
+    // IMPORTANT: sessionId + router are used inside handler
+  }, [sessionId, router]);
 
   // ✅ honor FORCE_NEW_SESSION_KEY and restore cached messages when possible
   useEffect(() => {

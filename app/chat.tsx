@@ -60,11 +60,16 @@ const INPUT_BAR_EST_HEIGHT = 76;
 // ✅ must match index.tsx
 const FORCE_NEW_SESSION_KEY = "vinniesbrain_force_new_session";
 
-// ✅ NEW: track last active so we can decide whether to reset after a full close
+// ✅ track last active so we can decide whether to reset after a full close
 const LAST_ACTIVE_TS_KEY = "vinniesbrain_last_active_ts";
 
-// ✅ NEW: if app was away longer than this, start fresh (10 minutes)
+// ✅ if app was away longer than this, start fresh (10 minutes)
 const RESET_AFTER_MS = 10 * 60 * 1000;
+
+// ✅ AI consent (one-time)
+const AI_CONSENT_KEY = "vinniesbrain_ai_consent_v1"; // "allow" | "deny"
+// IMPORTANT: set this to your real AI provider name
+const AI_PROVIDER_NAME = "OpenAI";
 
 function initials(label: string) {
   const s = (label || "").trim();
@@ -162,6 +167,10 @@ export default function Chat() {
   // ✅ Android keyboard visibility (helps lift input bar when keyboard is open)
   const [androidKeyboardOpen, setAndroidKeyboardOpen] = useState(false);
 
+  // ✅ AI consent state
+  const [aiConsent, setAiConsent] = useState<"unknown" | "allow" | "deny">("unknown");
+  const consentPromptShownRef = useRef(false);
+
   const listRef = useRef<FlatList<ChatItem>>(null);
   const inputRef = useRef<TextInput>(null);
 
@@ -181,7 +190,6 @@ export default function Chat() {
           style: "destructive",
           onPress: async () => {
             try {
-              // Ensures next time user starts troubleshooting it creates a fresh server session
               await AsyncStorage.setItem(FORCE_NEW_SESSION_KEY, "1");
             } catch {}
             router.replace("/");
@@ -191,17 +199,93 @@ export default function Chat() {
     );
   }, [router]);
 
+  // ✅ Load consent once on mount
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const v = await AsyncStorage.getItem(AI_CONSENT_KEY);
+        if (cancelled) return;
+        if (v === "allow" || v === "deny") setAiConsent(v);
+        else setAiConsent("unknown");
+      } catch {
+        if (cancelled) return;
+        setAiConsent("unknown");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const showAiConsentPrompt = useCallback(async (): Promise<"allow" | "deny"> => {
+    // If already decided, return it
+    if (aiConsent === "allow" || aiConsent === "deny") return aiConsent;
+
+    // Prevent multiple Alerts from stacking
+    if (consentPromptShownRef.current) {
+      // Wait briefly until state updates (best-effort)
+      return "deny";
+    }
+    consentPromptShownRef.current = true;
+
+    const result = await new Promise<"allow" | "deny">((resolve) => {
+      Alert.alert(
+        "AI Data Use Permission",
+        `Vinnie’s Brain uses ${AI_PROVIDER_NAME} to generate troubleshooting responses.\n\n` +
+          `To do this, we send:\n` +
+          `• The text you type in chat (and any details you include)\n` +
+          `• Your selected Airstream year (if provided)\n\n` +
+          `Do not include sensitive personal information.\n\n` +
+          `Do you allow Vinnie’s Brain to send your chat content to ${AI_PROVIDER_NAME}?`,
+        [
+          {
+            text: "Don’t Allow",
+            style: "cancel",
+            onPress: async () => {
+              try {
+                await AsyncStorage.setItem(AI_CONSENT_KEY, "deny");
+              } catch {}
+              setAiConsent("deny");
+              resolve("deny");
+            },
+          },
+          {
+            text: "Allow AI Assistance",
+            style: "default",
+            onPress: async () => {
+              try {
+                await AsyncStorage.setItem(AI_CONSENT_KEY, "allow");
+              } catch {}
+              setAiConsent("allow");
+              resolve("allow");
+            },
+          },
+        ]
+      );
+    });
+
+    consentPromptShownRef.current = false;
+    return result;
+  }, [aiConsent]);
+
+  // ✅ If they land here and consent is unknown, prompt once (non-annoying)
+  useEffect(() => {
+    if (aiConsent !== "unknown") return;
+    // Prompt only once per screen mount; they can still back out if they want
+    showAiConsentPrompt().catch(() => {});
+  }, [aiConsent, showAiConsentPrompt]);
+
   useEffect(() => {
     if (Platform.OS !== "android") return;
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-      // ✅ confirm before resetting progress via hardware back
       confirmGoHome();
       return true;
     });
     return () => sub.remove();
   }, [confirmGoHome]);
 
-  // ✅ Android keyboard listeners (move input up slightly so it’s not hidden)
+  // ✅ Android keyboard listeners
   useEffect(() => {
     if (Platform.OS !== "android") return;
     const show = Keyboard.addListener("keyboardDidShow", () => setAndroidKeyboardOpen(true));
@@ -239,44 +323,37 @@ export default function Chat() {
     };
   }, []);
 
-  // ✅ NEW: Option A — reset if app was fully “away” (close/long background)
+  // ✅ reset if app was fully “away”
   useEffect(() => {
     let prevState: AppStateStatus = AppState.currentState;
 
     const onChange = async (nextState: AppStateStatus) => {
       try {
-        // when leaving active -> record last active timestamp
         if (prevState === "active" && nextState.match(/inactive|background/)) {
           await AsyncStorage.setItem(LAST_ACTIVE_TS_KEY, String(Date.now()));
         }
 
-        // when coming back -> if away long enough, reset
         if (prevState.match(/inactive|background/) && nextState === "active") {
           const raw = await AsyncStorage.getItem(LAST_ACTIVE_TS_KEY);
           const lastTs = raw ? Number(raw) : 0;
 
           if (!lastTs || Date.now() - lastTs > RESET_AFTER_MS) {
-            // 1) force a new server session next time
             await AsyncStorage.setItem(FORCE_NEW_SESSION_KEY, "1");
 
-            // 2) best-effort: clear cached items for current session (if we have one)
             if (sessionId) {
               await AsyncStorage.removeItem(`vinniesbrain_chat_items_${sessionId}`);
             }
 
-            // 3) reset in-memory UI immediately
             setSessionId("");
             setItems([INITIAL_ASSISTANT]);
             setShowEscalate(false);
             setSending(false);
             setText("");
 
-            // 4) send them home so the flow restarts cleanly
             router.replace("/");
           }
         }
       } catch {
-        // If anything fails, do nothing — never crash the app
       } finally {
         prevState = nextState;
       }
@@ -284,7 +361,6 @@ export default function Chat() {
 
     const sub = AppState.addEventListener("change", onChange);
     return () => sub.remove();
-    // IMPORTANT: sessionId + router are used inside handler
   }, [sessionId, router]);
 
   // ✅ honor FORCE_NEW_SESSION_KEY and restore cached messages when possible
@@ -300,7 +376,6 @@ export default function Chat() {
           if (forceNew) await AsyncStorage.removeItem(FORCE_NEW_SESSION_KEY);
         } catch {}
 
-        // ✅ CRITICAL FIX: if forceNew, create a NEW server session
         const sid = forceNew
           ? await getOrCreateSession({ forceNew: true })
           : await getOrCreateSession();
@@ -331,7 +406,6 @@ export default function Chat() {
         setItems([INITIAL_ASSISTANT]);
         setShowEscalate(false);
       } catch {
-        // If session creation fails at launch, user can still type; we’ll create on first send.
         setItems([INITIAL_ASSISTANT]);
         setShowEscalate(false);
       }
@@ -351,19 +425,18 @@ export default function Chat() {
     })();
   }, [ITEMS_KEY, items]);
 
-  // ✅ DO NOT gate Send on sessionId (TestFlight can fail first session call)
-  const canSend = useMemo(() => !sending && text.trim().length > 0, [sending, text]);
+  // ✅ Lock chat unless consent is allowed
+  const aiAllowed = aiConsent === "allow";
+  const canSend = useMemo(() => aiAllowed && !sending && text.trim().length > 0, [aiAllowed, sending, text]);
 
   // Count turns
   const userTurns = useMemo(() => items.filter((x) => x.role === "user").length, [items]);
 
-  // assistantTurns excludes INITIAL_ASSISTANT
   const assistantTurns = useMemo(() => {
     const total = items.filter((x) => x.role === "assistant").length;
     return Math.max(0, total - 1);
   }, [items]);
 
-  // ✅ NEW: only allow escalation CTAs after 3 AI replies (excluding the initial assistant message)
   const escalationEligibleByAiPrompts = assistantTurns >= 3;
 
   async function sendAndAppend(sid: string, message: string) {
@@ -398,7 +471,20 @@ export default function Chat() {
     const msg = text.trim();
     if (!msg || sending) return;
 
-    // ✅ Close keyboard immediately
+    // ✅ Ensure consent before transmitting any user content to AI
+    if (!aiAllowed) {
+      const decision = await showAiConsentPrompt();
+      if (decision !== "allow") {
+        // Hard block: they can’t use the app without consent
+        Alert.alert(
+          "AI Permission Required",
+          `Vinnie’s Brain requires AI to operate. To use the app, please allow sending your chat content to ${AI_PROVIDER_NAME}.`,
+          [{ text: "OK" }]
+        );
+        return;
+      }
+    }
+
     Keyboard.dismiss();
     inputRef.current?.blur();
 
@@ -408,7 +494,6 @@ export default function Chat() {
     setItems((prev) => [...prev, { role: "user", text: msg }]);
 
     try {
-      // ✅ ensure we have a session id (create lazily if launch-time creation failed)
       let sid = sessionId;
       if (!sid) {
         sid = await getOrCreateSession();
@@ -460,10 +545,7 @@ export default function Chat() {
     );
   }
 
-  // ✅ NEW: show CTAs only if backend wants escalation AND user has reached 3 AI replies
   const showEscalationCTAs = showEscalate && escalationEligibleByAiPrompts;
-
-  // ✅ NEW: During business hours show BOTH; otherwise Email only (once eligible)
   const showLiveChatCTA = showEscalationCTAs && businessHours === true;
   const showEmailCTA = showEscalationCTAs;
 
@@ -476,9 +558,7 @@ export default function Chat() {
           headerShown: true,
           title: "",
           headerShadowVisible: false,
-          headerStyle: {
-            backgroundColor: BRAND.bg,
-          },
+          headerStyle: { backgroundColor: BRAND.bg },
           headerTintColor: BRAND.cream,
           gestureEnabled: false,
           headerLeft: () => (
@@ -499,12 +579,9 @@ export default function Chat() {
 
       <KeyboardAvoidingView
         style={styles.safe}
-        // ✅ Android: padding works better for keeping the input visible
         behavior={Platform.OS === "ios" ? "padding" : "padding"}
-        // ✅ slight lift on Android so the input isn’t buried by the keyboard
         keyboardVerticalOffset={Platform.OS === "ios" ? 120 : 80}
       >
-        {/* Message list */}
         <FlatList
           ref={listRef}
           data={items}
@@ -578,30 +655,55 @@ export default function Chat() {
           </Pressable>
         )}
 
+        {/* ✅ If consent denied, hard-lock the chat UI */}
+        {!aiAllowed && (
+          <View style={[styles.lockOverlay, { paddingBottom: 10 + safeBottom }]}>
+            <View style={styles.lockCard}>
+              <Text style={styles.lockTitle}>AI Permission Required</Text>
+              <Text style={styles.lockBody}>
+                Vinnie’s Brain requires AI to operate. To use the app, you must allow sending your chat content to{" "}
+                {AI_PROVIDER_NAME}.
+              </Text>
+
+              <Pressable
+                onPress={() => showAiConsentPrompt()}
+                style={({ pressed }) => [styles.lockBtn, pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] }]}
+              >
+                <Text style={styles.lockBtnText}>Review Permission</Text>
+              </Pressable>
+
+              <Pressable
+                onPress={confirmGoHome}
+                style={({ pressed }) => [styles.lockBtnAlt, pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] }]}
+              >
+                <Text style={styles.lockBtnAltText}>Go Home</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+
         <View
           style={[
             styles.inputWrap,
             {
               paddingBottom: 10 + safeBottom,
-              // ✅ small extra lift on Android while keyboard is open
               marginBottom: Platform.OS === "android" && androidKeyboardOpen ? 14 : 0,
-              // ✅ visually indicate disabled while sending
               opacity: sending ? 0.75 : 1,
             },
           ]}
-          pointerEvents={sending ? "none" : "auto"} // ✅ disables all input interactions while thinking
+          pointerEvents={sending || !aiAllowed ? "none" : "auto"}
         >
           <View style={styles.inputCard}>
             <TextInput
               ref={inputRef}
               value={text}
               onChangeText={setText}
-              placeholder="Type your message…"
+              placeholder={aiAllowed ? "Type your message…" : "AI permission required…"}
               placeholderTextColor="rgba(255,255,255,0.45)"
               style={styles.input}
               multiline
               returnKeyType="send"
-              editable={!sending} // ✅ disable typing while AI is thinking
+              editable={!sending && aiAllowed}
               onSubmitEditing={() => {
                 if (canSend) onSend();
               }}
@@ -610,11 +712,11 @@ export default function Chat() {
 
             <Pressable
               onPress={onSend}
-              disabled={!canSend || sending}
+              disabled={!canSend || sending || !aiAllowed}
               style={({ pressed }) => [
                 styles.sendBtn,
-                (!canSend || sending) && styles.sendBtnDisabled,
-                pressed && canSend && !sending && { opacity: 0.9, transform: [{ scale: 0.99 }] },
+                (!canSend || sending || !aiAllowed) && styles.sendBtnDisabled,
+                pressed && canSend && !sending && aiAllowed && { opacity: 0.9, transform: [{ scale: 0.99 }] },
               ]}
             >
               <Text style={styles.sendText}>{sending ? "…" : "Send"}</Text>
@@ -751,4 +853,56 @@ const styles = StyleSheet.create({
   },
   sendBtnDisabled: { opacity: 0.5 },
   sendText: { color: BRAND.cream, fontWeight: "900" },
+
+  // ✅ Lock overlay styles
+  lockOverlay: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    top: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 18,
+    backgroundColor: "rgba(7,16,24,0.85)",
+  },
+  lockCard: {
+    width: "100%",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    padding: 16,
+  },
+  lockTitle: {
+    color: BRAND.cream,
+    fontWeight: "900",
+    fontSize: 18,
+    marginBottom: 10,
+  },
+  lockBody: {
+    color: BRAND.text,
+    fontWeight: "700",
+    lineHeight: 20,
+    marginBottom: 14,
+  },
+  lockBtn: {
+    backgroundColor: BRAND.navy,
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+    marginBottom: 10,
+  },
+  lockBtnText: { color: BRAND.cream, fontWeight: "900" },
+  lockBtnAlt: {
+    backgroundColor: "rgba(255,255,255,0.10)",
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+  },
+  lockBtnAltText: { color: BRAND.cream, fontWeight: "900" },
 });

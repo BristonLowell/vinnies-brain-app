@@ -8,6 +8,7 @@ import {
   Alert,
   ScrollView,
   Platform,
+  Linking,
 } from "react-native";
 import { router, useLocalSearchParams, type Href } from "expo-router";
 import Purchases, { PurchasesPackage, PurchasesOffering } from "react-native-purchases";
@@ -19,6 +20,10 @@ import {
   openManageSubscription,
   debugCustomerInfo,
 } from "../src/billing";
+
+// ✅ Apple-required legal links (must open a working URL)
+const PRIVACY_URL = "https://bristonlowell.github.io/vinnies-brain-privacy";
+const TERMS_URL = "https://bristonlowell.github.io/vinnies-brain-privacy/terms";
 
 function normalizeRedirect(input: unknown): Href {
   const raw = typeof input === "string" ? input : Array.isArray(input) ? input[0] : undefined;
@@ -37,6 +42,16 @@ function pickPrimaryPackage(offering: PurchasesOffering): PurchasesPackage | nul
     pkgs[0];
 
   return monthly ?? pkgs[0] ?? null;
+}
+
+async function openUrl(url: string) {
+  try {
+    const ok = await Linking.canOpenURL(url);
+    if (!ok) throw new Error("Cannot open URL");
+    await Linking.openURL(url);
+  } catch {
+    Alert.alert("Link unavailable", "Could not open the link. Please try again.");
+  }
 }
 
 export default function PaywallScreen() {
@@ -176,6 +191,11 @@ export default function PaywallScreen() {
   const primary = pickPrimaryPackage(offering);
   const allPkgs = offering.availablePackages ?? [];
 
+  // ✅ Helpful subscription disclosure text Apple expects to be present in-app
+  const subName = "Vinnie’s Brain Pro";
+  const subLength = "Monthly";
+  const subPrice = primary?.product?.priceString || "";
+
   return (
     <ScrollView
       style={styles.screen}
@@ -201,7 +221,7 @@ export default function PaywallScreen() {
         <View style={styles.logoCircle}>
           <Text style={styles.logoText}>VB</Text>
         </View>
-        <Text style={styles.title}>Vinnie’s Brain Pro</Text>
+        <Text style={styles.title}>{subName}</Text>
         <Text style={styles.subtitle}>Expert Airstream troubleshooting — step by step.</Text>
       </View>
 
@@ -235,10 +255,25 @@ export default function PaywallScreen() {
               <Text style={styles.primaryCtaSub}>Cancel anytime</Text>
             </Pressable>
 
-            <Text style={styles.trialNote}>
-              Includes a 7-day free trial for new subscribers
+            <Text style={styles.trialNote}>Includes a 7-day free trial for new subscribers</Text>
+
+            {/* ✅ Apple-required: subscription title, length, price, and links */}
+            <Text style={styles.requiredInfo}>
+              Subscription: {subName} • {subLength}
+              {subPrice ? ` • ${subPrice}/month` : ""}
             </Text>
 
+            <View style={styles.linksRow}>
+              <Pressable onPress={() => openUrl(TERMS_URL)} hitSlop={10}>
+                <Text style={styles.linkText}>Terms of Use (EULA)</Text>
+              </Pressable>
+
+              <Text style={styles.linkDot}>•</Text>
+
+              <Pressable onPress={() => openUrl(PRIVACY_URL)} hitSlop={10}>
+                <Text style={styles.linkText}>Privacy Policy</Text>
+              </Pressable>
+            </View>
 
             {/* If you ever have multiple packages (monthly/annual), show them as secondary options */}
             {allPkgs.length > 1 ? (
@@ -264,6 +299,11 @@ export default function PaywallScreen() {
           {Platform.OS === "ios"
             ? "Apple handles billing and security. You can manage or cancel anytime in your App Store subscriptions."
             : "Google Play handles billing and security. You can manage or cancel anytime in your Play Store subscriptions."}
+        </Text>
+
+        <Text style={styles.finePrint}>
+          Auto-renewal: Payment will be charged to your account at confirmation of purchase. Subscription automatically
+          renews unless canceled at least 24 hours before the end of the current period.
         </Text>
       </View>
     </ScrollView>
@@ -390,6 +430,30 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 
+  requiredInfo: {
+    marginTop: 10,
+    color: "rgba(255,255,255,0.7)",
+    fontWeight: "800",
+    fontSize: 12,
+    lineHeight: 16,
+    textAlign: "center",
+  },
+
+  linksRow: {
+    marginTop: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    flexWrap: "wrap",
+  },
+  linkText: {
+    color: "rgba(255,255,255,0.80)",
+    fontWeight: "900",
+    textDecorationLine: "underline",
+  },
+  linkDot: { color: "rgba(255,255,255,0.55)", fontWeight: "900" },
+
   // Kept for compatibility with your previous "Back to Home" path in the unavailable view
   primaryBtn: {
     width: "100%",
@@ -404,11 +468,10 @@ const styles = StyleSheet.create({
   primaryBtnText: { color: "#043553", fontWeight: "900" },
 
   trialNote: {
-  marginTop: 6,
-  color: "rgba(255,255,255,0.75)",
-  fontWeight: "700",
-  fontSize: 13,
-  textAlign: "center",
-},
-
+    marginTop: 6,
+    color: "rgba(255,255,255,0.75)",
+    fontWeight: "700",
+    fontSize: 13,
+    textAlign: "center",
+  },
 });

@@ -174,6 +174,9 @@ export default function Chat() {
   const listRef = useRef<FlatList<ChatItem>>(null);
   const inputRef = useRef<TextInput>(null);
 
+  // ✅ “Resolved?” prompt state
+  const [showResolvedPrompt, setShowResolvedPrompt] = useState(false);
+
   const ITEMS_KEY = useMemo(
     () => (sessionId ? `vinniesbrain_chat_items_${sessionId}` : ""),
     [sessionId]
@@ -198,6 +201,24 @@ export default function Chat() {
       ]
     );
   }, [router]);
+
+  async function goHomeResolved() {
+    try {
+      await AsyncStorage.setItem(FORCE_NEW_SESSION_KEY, "1");
+    } catch {}
+    router.replace("/");
+  }
+
+  function onResolvedNo() {
+    setShowResolvedPrompt(false);
+    // bring keyboard back + focus input
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }
+
+  function onResolvedYes() {
+    setShowResolvedPrompt(false);
+    goHomeResolved();
+  }
 
   // ✅ Load consent once on mount
   useEffect(() => {
@@ -349,6 +370,7 @@ export default function Chat() {
             setShowEscalate(false);
             setSending(false);
             setText("");
+            setShowResolvedPrompt(false);
 
             router.replace("/");
           }
@@ -376,9 +398,7 @@ export default function Chat() {
           if (forceNew) await AsyncStorage.removeItem(FORCE_NEW_SESSION_KEY);
         } catch {}
 
-        const sid = forceNew
-          ? await getOrCreateSession({ forceNew: true })
-          : await getOrCreateSession();
+        const sid = forceNew ? await getOrCreateSession({ forceNew: true }) : await getOrCreateSession();
 
         if (cancelled) return;
 
@@ -387,6 +407,7 @@ export default function Chat() {
         if (forceNew) {
           setItems([INITIAL_ASSISTANT]);
           setShowEscalate(false);
+          setShowResolvedPrompt(false);
           return;
         }
 
@@ -430,8 +451,6 @@ export default function Chat() {
   const canSend = useMemo(() => aiAllowed && !sending && text.trim().length > 0, [aiAllowed, sending, text]);
 
   // Count turns
-  const userTurns = useMemo(() => items.filter((x) => x.role === "user").length, [items]);
-
   const assistantTurns = useMemo(() => {
     const total = items.filter((x) => x.role === "assistant").length;
     return Math.max(0, total - 1);
@@ -464,12 +483,21 @@ export default function Chat() {
       },
     ]);
 
-    setShowEscalate(!!(res as any).show_escalation);
+    const se = !!(res as any).show_escalation;
+    setShowEscalate(se);
+
+    // ✅ After AI responds, ask if resolved (hide keyboard so they see it)
+    Keyboard.dismiss();
+    inputRef.current?.blur();
+    setShowResolvedPrompt(true);
   }
 
   async function onSend() {
     const msg = text.trim();
     if (!msg || sending) return;
+
+    // ✅ Hide resolved prompt once user continues
+    setShowResolvedPrompt(false);
 
     // ✅ Ensure consent before transmitting any user content to AI
     if (!aiAllowed) {
@@ -511,6 +539,9 @@ export default function Chat() {
         },
       ]);
       setShowEscalate(true);
+
+      // still offer resolved prompt? probably not when error
+      setShowResolvedPrompt(false);
     } finally {
       setSending(false);
       scrollToBottom(true);
@@ -531,6 +562,7 @@ export default function Chat() {
           text: "Confirm",
           style: "default",
           onPress: () => {
+            setShowResolvedPrompt(false);
             if (isEmail) {
               router.push({
                 pathname: "/escalate",
@@ -563,7 +595,10 @@ export default function Chat() {
           gestureEnabled: false,
           headerLeft: () => (
             <Pressable
-              onPress={confirmGoHome}
+              onPress={() => {
+                setShowResolvedPrompt(false);
+                confirmGoHome();
+              }}
               hitSlop={12}
               style={({ pressed }) => [
                 styles.headerBack,
@@ -588,7 +623,10 @@ export default function Chat() {
           keyExtractor={(_, i) => String(i)}
           contentContainerStyle={[
             styles.listContent,
-            { paddingBottom: styles.listContent.paddingBottom + INPUT_BAR_EST_HEIGHT + 16 + safeBottom },
+            {
+              paddingBottom:
+                styles.listContent.paddingBottom + INPUT_BAR_EST_HEIGHT + 16 + safeBottom + (showResolvedPrompt ? 86 : 0),
+            },
           ]}
           keyboardShouldPersistTaps="always"
           keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
@@ -631,28 +669,85 @@ export default function Chat() {
           }
         />
 
-        {showLiveChatCTA && (
-          <Pressable
-            style={({ pressed }) => [styles.escalate, pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] }]}
-            onPress={() => confirmEscalation("livechat")}
-          >
-            <Text style={styles.escalateText}>Chat with Vinnies now</Text>
-            <Text style={styles.escalateSub}>You are chatting with Vinnies</Text>
-          </Pressable>
+        {/* ✅ Escalation CTAs */}
+        {showEscalationCTAs && (
+          businessHours === true ? (
+            // Business hours: show BOTH buttons side-by-side
+            <View style={styles.escalateRow}>
+              {showLiveChatCTA && (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.escalate,
+                    styles.escalateHalf,
+                    pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] },
+                  ]}
+                  onPress={() => confirmEscalation("livechat")}
+                >
+                  <Text style={styles.escalateText}>Chat with Vinnies now</Text>
+                  <Text style={styles.escalateSub}>Live support</Text>
+                </Pressable>
+              )}
+
+              {showEmailCTA && (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.escalate,
+                    styles.escalateHalf,
+                    pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] },
+                  ]}
+                  onPress={() => confirmEscalation("email")}
+                >
+                  <Text style={styles.escalateText}>Email Vinnies</Text>
+                  <Text style={styles.escalateSub}>We’ll attach your chat</Text>
+                </Pressable>
+              )}
+            </View>
+          ) : (
+            // After hours (or unknown): keep Email full-width
+            showEmailCTA ? (
+              <Pressable
+                style={({ pressed }) => [styles.escalate, pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] }]}
+                onPress={() => confirmEscalation("email")}
+              >
+                <Text style={styles.escalateText}>Email Vinnies</Text>
+                <Text style={styles.escalateSub}>
+                  {businessHours === false
+                    ? `After hours — we’ll attach your chat when you submit.${nextOpen ? ` Next open: ${fmtLocal(nextOpen)}` : ""}`
+                    : "We’ll attach your troubleshooting history when you submit."}
+                </Text>
+              </Pressable>
+            ) : null
+          )
         )}
 
-        {showEmailCTA && (
-          <Pressable
-            style={({ pressed }) => [styles.escalate, pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] }]}
-            onPress={() => confirmEscalation("email")}
-          >
-            <Text style={styles.escalateText}>Email Vinnies</Text>
-            <Text style={styles.escalateSub}>
-              {businessHours === false
-                ? `After hours — we’ll attach your chat when you submit.${nextOpen ? ` Next open: ${fmtLocal(nextOpen)}` : ""}`
-                : "We’ll attach your troubleshooting history when you submit."}
-            </Text>
-          </Pressable>
+
+        {/* ✅ Resolved prompt (shows after AI replies) */}
+        {aiAllowed && !sending && showResolvedPrompt && (
+          <View style={[styles.resolvedWrap, { marginBottom: 10 }]}>
+            <Text style={styles.resolvedText}>Is your problem resolved?</Text>
+            <View style={styles.resolvedBtns}>
+              <Pressable
+                onPress={onResolvedNo}
+                style={({ pressed }) => [
+                  styles.resolvedBtn,
+                  styles.resolvedNo,
+                  pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] },
+                ]}
+              >
+                <Text style={styles.resolvedBtnText}>No</Text>
+              </Pressable>
+              <Pressable
+                onPress={onResolvedYes}
+                style={({ pressed }) => [
+                  styles.resolvedBtn,
+                  styles.resolvedYes,
+                  pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] },
+                ]}
+              >
+                <Text style={styles.resolvedBtnText}>Yes</Text>
+              </Pressable>
+            </View>
+          </View>
         )}
 
         {/* ✅ If consent denied, hard-lock the chat UI */}
@@ -673,7 +768,10 @@ export default function Chat() {
               </Pressable>
 
               <Pressable
-                onPress={confirmGoHome}
+                onPress={() => {
+                  setShowResolvedPrompt(false);
+                  confirmGoHome();
+                }}
                 style={({ pressed }) => [styles.lockBtnAlt, pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] }]}
               >
                 <Text style={styles.lockBtnAltText}>Go Home</Text>
@@ -708,6 +806,10 @@ export default function Chat() {
                 if (canSend) onSend();
               }}
               blurOnSubmit={false}
+              onFocus={() => {
+                // If they focus the input, assume they want to continue chatting
+                setShowResolvedPrompt(false);
+              }}
             />
 
             <Pressable
@@ -822,6 +924,59 @@ const styles = StyleSheet.create({
   },
   escalateText: { color: BRAND.cream, fontWeight: "900", fontSize: 16 },
   escalateSub: { color: BRAND.muted, marginTop: 6, fontWeight: "800" },
+
+    escalateRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginHorizontal: 14,
+    marginBottom: 10,
+  },
+  escalateHalf: {
+    flex: 1,
+    marginHorizontal: 0,
+    marginBottom: 0,
+  },
+
+
+  // ✅ Resolved prompt styles
+  resolvedWrap: {
+    marginHorizontal: 14,
+    padding: 12,
+    borderRadius: 18,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+  },
+  resolvedText: {
+    color: BRAND.cream,
+    fontWeight: "900",
+    fontSize: 15,
+    marginBottom: 10,
+  },
+  resolvedBtns: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  resolvedBtn: {
+    flex: 1,
+    borderRadius: 14,
+    paddingVertical: 10,
+    alignItems: "center",
+    borderWidth: 1,
+  },
+  resolvedNo: {
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderColor: "rgba(255,255,255,0.14)",
+  },
+  resolvedYes: {
+    backgroundColor: "rgba(4,53,83,0.55)",
+    borderColor: "rgba(241,238,219,0.28)",
+  },
+  resolvedBtnText: {
+    color: BRAND.cream,
+    fontWeight: "900",
+    fontSize: 15,
+  },
 
   inputWrap: { paddingHorizontal: 14 },
   inputCard: {

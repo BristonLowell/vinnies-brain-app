@@ -186,24 +186,28 @@ export default function Escalate() {
               <>
                 <Text style={styles.title}>Request received ✅</Text>
 
-                {emailed === true ? (
-                  <Text style={styles.note}>
-                    Email sent successfully. We saved your conversation and your request.
-                  </Text>
-                ) : emailed === false ? (
-                  <Text style={styles.note}>
-                    We saved your conversation and request. Email delivery is pending (server couldn’t send right now).
-                  </Text>
-                ) : (
-                  <Text style={styles.note}>
-                    We saved your conversation and your request.
-                    {businessHours === false ? " We’re currently after hours." : ""}
-                  </Text>
-                )}
+                <Text style={styles.note}>
+                  {emailed === true
+                    ? "Email sent successfully. We saved your conversation and your request."
+                    : emailed === false
+                    ? "We saved your conversation and request. Email delivery is pending (server couldn’t send right now)."
+                    : `We saved your conversation and your request.${
+                        businessHours === false ? " We’re currently after hours." : ""
+                      }`}
+                </Text>
+
+                <Text style={[styles.note, { marginTop: 6 }]}>
+                  You can expect a response within{" "}
+                  <Text style={{ fontWeight: "900", color: BRAND.cream }}>
+                    24–48 hours
+                  </Text>.
+                </Text>
 
                 <Text style={styles.mini}>
                   Destination:{" "}
-                  <Text style={{ fontWeight: "900", color: BRAND.cream }}>{supportEmail}</Text>
+                  <Text style={{ fontWeight: "900", color: BRAND.cream }}>
+                    {supportEmail}
+                  </Text>
                 </Text>
 
                 {!!nextOpen && businessHours === false ? (

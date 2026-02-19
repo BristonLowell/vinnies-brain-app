@@ -13,6 +13,7 @@ import {
   InteractionManager,
   Keyboard,
   ScrollView,
+  Image,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -56,6 +57,10 @@ function fmt(ts?: string) {
   return d.toLocaleString();
 }
 
+function isDataImage(body?: string) {
+  return !!body && body.startsWith("data:image/");
+}
+
 export default function AdminChat() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -79,8 +84,6 @@ export default function AdminChat() {
   const [error, setError] = useState<string>("");
 
   // AI history panel
-  // showAi = open/close panel
-  // aiExpanded = full transcript vs preview
   const [showAi, setShowAi] = useState<boolean>(false);
   const [aiExpanded, setAiExpanded] = useState<boolean>(false);
   const [aiMessages, setAiMessages] = useState<AiMsg[]>([]);
@@ -143,7 +146,8 @@ export default function AdminChat() {
           active_article_id: data?.active_article_id ?? null,
           active_node_id: data?.active_node_id ?? null,
           active_node_text: data?.active_node_text ?? null,
-          active_tree_present: typeof data?.active_tree_present === "boolean" ? data.active_tree_present : undefined,
+          active_tree_present:
+            typeof data?.active_tree_present === "boolean" ? data.active_tree_present : undefined,
         });
       } catch (e: any) {
         setAiError(String(e?.message ?? "Failed to load AI history."));
@@ -222,7 +226,8 @@ export default function AdminChat() {
           style: "destructive",
           onPress: async () => {
             try {
-              await adminDeleteLiveChatConversation(conversationId, adminKey);
+              // ✅ FIX: api.ts signature is (adminKey, conversationId)
+              await adminDeleteLiveChatConversation(adminKey, conversationId);
               router.back();
             } catch (e: any) {
               Alert.alert("Failed", String(e?.message ?? "Could not delete conversation."));
@@ -235,11 +240,7 @@ export default function AdminChat() {
 
   // Preview vs full transcript
   const previewCount = 10;
-  const aiPreview =
-    aiMessages.length > previewCount ? aiMessages.slice(-previewCount) : aiMessages;
-
-  // ✅ IMPORTANT: remove pinned/clarifying/pinned node UI entirely
-  // (We keep aiMeta in case you still use it elsewhere, but we do not render pinned info.)
+  const aiPreview = aiMessages.length > previewCount ? aiMessages.slice(-previewCount) : aiMessages;
 
   const AiHeader = (
     <View style={styles.aiWrap}>
@@ -249,7 +250,6 @@ export default function AdminChat() {
         <View style={styles.aiTopBtns}>
           <Pressable
             onPress={async () => {
-              // If opening, refresh once so it’s current
               const next = !showAi;
               setShowAi(next);
               if (next && adminKey) {
@@ -283,10 +283,7 @@ export default function AdminChat() {
       ) : (
         <View style={styles.aiTranscriptCard}>
           <ScrollView
-            style={[
-              styles.aiScroll,
-              { maxHeight: aiExpanded ? 520 : 240 },
-            ]}
+            style={[styles.aiScroll, { maxHeight: aiExpanded ? 520 : 240 }]}
             contentContainerStyle={{ paddingBottom: 10 }}
             nestedScrollEnabled
           >
@@ -354,6 +351,9 @@ export default function AdminChat() {
   const inputBarEst = 70;
   const listBottomPad = inputBarEst + safeBottom + 14;
 
+  // Smaller keyboard gap on iOS
+  const iosKeyboardOffset = Math.max(insets.top, 6);
+
   if (!adminKey) {
     return (
       <SafeAreaView style={styles.safe}>
@@ -371,7 +371,10 @@ export default function AdminChat() {
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={({ pressed }) => [styles.hBtn, pressed && { opacity: 0.85 }]}>
+        <Pressable
+          onPress={() => router.back()}
+          style={({ pressed }) => [styles.hBtn, pressed && { opacity: 0.85 }]}
+        >
           <Text style={styles.hBtnText}>Back</Text>
         </Pressable>
 
@@ -397,7 +400,7 @@ export default function AdminChat() {
       <KeyboardAvoidingView
         style={styles.safe}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 120 : 0}
+        keyboardVerticalOffset={Platform.OS === "ios" ? iosKeyboardOffset : 0}
       >
         <FlatList
           ref={listRef}
@@ -410,6 +413,9 @@ export default function AdminChat() {
             const isSys = item.sender_role === "system";
             const label = isSys ? "System" : isOwner ? "Owner" : "Customer";
 
+            const body = item.body || "";
+            const showImg = !isSys && isDataImage(body);
+
             return (
               <View style={[styles.msgRow, isOwner ? styles.right : styles.left]}>
                 <View style={[styles.bubble, isOwner ? styles.bOwner : isSys ? styles.bSys : styles.bCust]}>
@@ -417,7 +423,12 @@ export default function AdminChat() {
                     <Text style={styles.msgLabel}>{label}</Text>
                     {!!item.created_at && <Text style={styles.msgTime}>{fmt(item.created_at)}</Text>}
                   </View>
-                  <Text style={styles.msgText}>{item.body || ""}</Text>
+
+                  {showImg ? (
+                    <Image source={{ uri: body }} style={styles.msgImage} />
+                  ) : (
+                    <Text style={styles.msgText}>{body}</Text>
+                  )}
                 </View>
               </View>
             );
@@ -576,6 +587,13 @@ const styles = StyleSheet.create({
   msgLabel: { color: "rgba(241,238,219,0.92)", fontWeight: "900", fontSize: 12 },
   msgTime: { color: "rgba(255,255,255,0.45)", fontWeight: "700", fontSize: 11 },
   msgText: { color: "rgba(255,255,255,0.92)", fontSize: 14, lineHeight: 19 },
+
+  msgImage: {
+    width: 220,
+    height: 220,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.06)",
+  },
 
   inputBar: {
     paddingHorizontal: 12,

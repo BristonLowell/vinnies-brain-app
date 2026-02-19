@@ -13,8 +13,11 @@ import {
   Keyboard,
   RefreshControl,
   BackHandler,
+  Image,
+  Alert,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import * as ImagePicker from "expo-image-picker";
 import { getOrCreateSession, liveChatHistory, liveChatSend, liveChatOpened } from "../src/api";
 
 const BRAND = {
@@ -35,8 +38,7 @@ type Msg = {
   conversation_id?: string;
 };
 
-const INPUT_BAR_EST_HEIGHT = 76;
-const IOS_KEYBOARD_OFFSET = 120;
+const INPUT_BAR_EST_HEIGHT = 86; // slightly taller now with attach button
 
 function SkeletonBubble({ mine }: { mine?: boolean }) {
   return (
@@ -45,6 +47,10 @@ function SkeletonBubble({ mine }: { mine?: boolean }) {
       <View style={[styles.skelLine, { width: "72%", marginTop: 8 }]} />
     </View>
   );
+}
+
+function isDataImage(body: string) {
+  return typeof body === "string" && body.startsWith("data:image/");
 }
 
 export default function LiveChat() {
@@ -56,8 +62,6 @@ export default function LiveChat() {
     router.replace("/");
   }, [router]);
 
-  const [keyboardOpen, setKeyboardOpen] = useState(false);
-
   const [sessionId, setSessionId] = useState<string>("");
   const [conversationId, setConversationId] = useState<string>("");
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -67,21 +71,16 @@ export default function LiveChat() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string>("");
 
+  // photo attachment (stored as data URI so it works with your existing backend)
+  const [photoDataUri, setPhotoDataUri] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+
   const listRef = useRef<FlatList<Msg>>(null);
   const pollTimerRef = useRef<any>(null);
   const lastSigRef = useRef<string>("");
 
   // ✅ only call /v1/livechat/opened once per screen mount
   const didOpenedRef = useRef(false);
-
-  useEffect(() => {
-    const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardOpen(true));
-    const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardOpen(false));
-    return () => {
-      show.remove();
-      hide.remove();
-    };
-  }, []);
 
   useEffect(() => {
     if (Platform.OS !== "android") return;
@@ -146,15 +145,13 @@ export default function LiveChat() {
 
         setSessionId(sid);
 
-        // Load history first (so you see anything already there)
+        // Load history first
         await refresh(sid);
         if (cancelled) return;
 
         setReady(true);
 
-        // ✅ Call backend ONCE when live chat is opened:
-        // - inserts system message: "We will be with you shortly."
-        // - notifies / bumps admin
+        // ✅ Call backend ONCE when live chat is opened
         if (!didOpenedRef.current) {
           didOpenedRef.current = true;
           try {
@@ -191,25 +188,87 @@ export default function LiveChat() {
     };
   }, [sessionId, refresh]);
 
-  const canSend = useMemo(
-    () => text.trim().length > 0 && ready && !!sessionId && !loading,
-    [text, ready, sessionId, loading]
-  );
+  const canSend = useMemo(() => {
+    const hasText = text.trim().length > 0;
+    const hasPhoto = !!photoDataUri;
+    return (hasText || hasPhoto) && ready && !!sessionId && !loading && !sending;
+  }, [text, photoDataUri, ready, sessionId, loading, sending]);
+
+  async function pickPhoto() {
+    try {
+      if (Platform.OS !== "web") {
+        const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!perm.granted) {
+          Alert.alert("Permission needed", "Please allow photo library access to attach an image.");
+          return;
+        }
+      }
+
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.7,
+        base64: true,
+      });
+
+      if (res.canceled) return;
+
+      const asset = res.assets?.[0];
+      if (!asset?.base64) {
+        Alert.alert("Photo error", "Could not read the selected image. Please try a different photo.");
+        return;
+      }
+
+      const mime =
+        (asset as any).mimeType ||
+        (asset.uri?.toLowerCase().includes(".png") ? "image/png" : "image/jpeg");
+
+      const dataUri = `data:${mime};base64,${asset.base64}`;
+      setPhotoDataUri(dataUri);
+
+      // Scroll so the preview/input is visible
+      requestAnimationFrame(scrollToBottom);
+    } catch (e: any) {
+      Alert.alert("Photo error", String(e?.message ?? "Failed to pick a photo."));
+    }
+  }
 
   async function send() {
     try {
-      const body = text.trim();
-      if (!body || !sessionId) return;
+      if (!sessionId) return;
 
-      setText("");
+      const bodyText = text.trim();
+      const bodyPhoto = photoDataUri;
+
+      if (!bodyText && !bodyPhoto) return;
+
+      setSending(true);
       setError("");
 
-      await liveChatSend(sessionId, body);
+      // clear input immediately
+      setText("");
+      setPhotoDataUri(null);
+
+      // If they included both, send text then image (keeps display nice)
+      if (bodyText) {
+        await liveChatSend(sessionId, bodyText);
+      }
+      if (bodyPhoto) {
+        await liveChatSend(sessionId, bodyPhoto);
+      }
+
       await refresh(sessionId);
+      requestAnimationFrame(scrollToBottom);
     } catch (e: any) {
       setError(String(e?.message ?? "Failed to send message."));
+    } finally {
+      setSending(false);
     }
   }
+
+  // ✅ Smaller iOS offset = less “dead space” above keyboard.
+  // Since your header is inside this screen and you hide the native header, a tiny offset works best.
+  const iosKeyboardOffset = Math.max(insets.top, 6);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
@@ -219,10 +278,11 @@ export default function LiveChat() {
           gestureEnabled: false,
         }}
       />
+
       <KeyboardAvoidingView
         style={styles.safe}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? IOS_KEYBOARD_OFFSET : 0}
+        keyboardVerticalOffset={Platform.OS === "ios" ? iosKeyboardOffset : 0}
       >
         <View style={styles.header}>
           <Pressable
@@ -298,6 +358,7 @@ export default function LiveChat() {
             renderItem={({ item }) => {
               const mine = item.sender_role === "customer";
               const isSystem = item.sender_role === "system";
+              const showImg = !isSystem && isDataImage(item.body);
 
               return (
                 <View
@@ -306,9 +367,13 @@ export default function LiveChat() {
                     mine ? styles.mine : isSystem ? styles.system : styles.theirs,
                   ]}
                 >
-                  <Text style={[styles.msgText, isSystem ? styles.systemText : null]}>
-                    {item.body}
-                  </Text>
+                  {showImg ? (
+                    <Image source={{ uri: item.body }} style={styles.msgImage} />
+                  ) : (
+                    <Text style={[styles.msgText, isSystem ? styles.systemText : null]}>
+                      {item.body}
+                    </Text>
+                  )}
                 </View>
               );
             }}
@@ -321,29 +386,48 @@ export default function LiveChat() {
           />
         )}
 
-        <View
-          style={[
-            styles.inputWrap,
-            { paddingBottom: 12 + safeBottom },
-            keyboardOpen ? { paddingBottom: 28 + safeBottom } : null,
-          ]}
-        >
-          <TextInput
-            value={text}
-            onChangeText={setText}
-            placeholder="Type a message…"
-            placeholderTextColor="rgba(255,255,255,0.45)"
-            style={styles.input}
-            multiline
-            editable={ready && !loading}
-          />
-          <Pressable
-            style={[styles.btn, !canSend && styles.btnDisabled]}
-            disabled={!canSend}
-            onPress={send}
-          >
-            <Text style={styles.btnText}>Send</Text>
-          </Pressable>
+        <View style={[styles.inputWrap, { paddingBottom: 12 + safeBottom }]}>
+          {photoDataUri ? (
+            <View style={styles.photoPreviewRow}>
+              <Image source={{ uri: photoDataUri }} style={styles.photoPreview} />
+              <Pressable
+                onPress={() => setPhotoDataUri(null)}
+                style={({ pressed }) => [styles.removePhotoBtn, pressed && { opacity: 0.9 }]}
+                hitSlop={10}
+              >
+                <Text style={styles.removePhotoText}>Remove</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          <View style={styles.inputRow}>
+            <Pressable
+              onPress={pickPhoto}
+              style={({ pressed }) => [styles.attachBtn, pressed && { opacity: 0.9 }]}
+              hitSlop={10}
+              disabled={!ready || loading || sending}
+            >
+              <Text style={styles.attachBtnText}>＋</Text>
+            </Pressable>
+
+            <TextInput
+              value={text}
+              onChangeText={setText}
+              placeholder="Type a message…"
+              placeholderTextColor="rgba(255,255,255,0.45)"
+              style={styles.input}
+              multiline
+              editable={ready && !loading && !sending}
+            />
+
+            <Pressable
+              style={[styles.btn, !canSend && styles.btnDisabled]}
+              disabled={!canSend}
+              onPress={send}
+            >
+              <Text style={styles.btnText}>{sending ? "Sending…" : "Send"}</Text>
+            </Pressable>
+          </View>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -428,16 +512,37 @@ const styles = StyleSheet.create({
   systemText: { color: "rgba(241,238,219,0.95)", fontWeight: "900", textAlign: "center" },
 
   msgText: { color: BRAND.text, fontSize: 15, lineHeight: 20 },
+  msgImage: {
+    width: 220,
+    height: 220,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.06)",
+  },
 
   inputWrap: {
-    flexDirection: "row",
-    gap: 10,
     padding: 12,
     borderTopWidth: 1,
     borderTopColor: BRAND.border,
     backgroundColor: BRAND.bg,
+  },
+  inputRow: {
+    flexDirection: "row",
+    gap: 10,
     alignItems: "flex-end",
   },
+
+  attachBtn: {
+    height: 44,
+    width: 44,
+    borderRadius: 14,
+    backgroundColor: BRAND.surface,
+    borderWidth: 1,
+    borderColor: BRAND.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  attachBtnText: { color: "white", fontWeight: "900", fontSize: 18, marginTop: -1 },
+
   input: {
     flex: 1,
     color: "white",
@@ -462,6 +567,28 @@ const styles = StyleSheet.create({
   },
   btnDisabled: { opacity: 0.4 },
   btnText: { color: BRAND.navy, fontWeight: "900" },
+
+  photoPreviewRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 10,
+  },
+  photoPreview: {
+    width: 64,
+    height: 64,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.06)",
+  },
+  removePhotoBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.10)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+  },
+  removePhotoText: { color: BRAND.cream, fontWeight: "900" },
 
   empty: { padding: 24, alignItems: "center", gap: 8 },
   emptyTitle: { color: "white", fontWeight: "900", fontSize: 16 },

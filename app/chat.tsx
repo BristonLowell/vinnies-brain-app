@@ -217,7 +217,7 @@ export default function Chat() {
 
   function onResolvedYes() {
     setShowResolvedPrompt(false);
-    goHomeResolved();
+    confirmGoHome();
   }
 
   // ✅ Load consent once on mount
@@ -624,10 +624,15 @@ export default function Chat() {
           contentContainerStyle={[
             styles.listContent,
             {
+              // If resolved prompt is showing, the input bar is hidden, so don't reserve space for it.
               paddingBottom:
-                styles.listContent.paddingBottom + INPUT_BAR_EST_HEIGHT + 16 + safeBottom + (showResolvedPrompt ? 86 : 0),
+                styles.listContent.paddingBottom +
+                16 +
+                safeBottom +
+                (showResolvedPrompt ? 96 : INPUT_BAR_EST_HEIGHT + 16),
             },
           ]}
+
           keyboardShouldPersistTaps="always"
           keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
           onTouchStart={Keyboard.dismiss}
@@ -780,51 +785,54 @@ export default function Chat() {
           </View>
         )}
 
-        <View
-          style={[
-            styles.inputWrap,
-            {
-              paddingBottom: 10 + safeBottom,
-              marginBottom: Platform.OS === "android" && androidKeyboardOpen ? 14 : 0,
-              opacity: sending ? 0.75 : 1,
-            },
-          ]}
-          pointerEvents={sending || !aiAllowed ? "none" : "auto"}
-        >
-          <View style={styles.inputCard}>
-            <TextInput
-              ref={inputRef}
-              value={text}
-              onChangeText={setText}
-              placeholder={aiAllowed ? "Type your message…" : "AI permission required…"}
-              placeholderTextColor="rgba(255,255,255,0.45)"
-              style={styles.input}
-              multiline
-              returnKeyType="send"
-              editable={!sending && aiAllowed}
-              onSubmitEditing={() => {
-                if (canSend) onSend();
-              }}
-              blurOnSubmit={false}
-              onFocus={() => {
-                // If they focus the input, assume they want to continue chatting
-                setShowResolvedPrompt(false);
-              }}
-            />
+        {/* ✅ Chat input (hide it while the resolved prompt is showing) */}
+        {!showResolvedPrompt && (
+          <View
+            style={[
+              styles.inputWrap,
+              {
+                paddingBottom: 10 + safeBottom,
+                marginBottom: Platform.OS === "android" && androidKeyboardOpen ? 14 : 0,
+                opacity: sending ? 0.75 : 1,
+              },
+            ]}
+            pointerEvents={sending || !aiAllowed ? "none" : "auto"}
+          >
+            <View style={styles.inputCard}>
+              <TextInput
+                ref={inputRef}
+                value={text}
+                onChangeText={setText}
+                placeholder={aiAllowed ? "Type your message…" : "AI permission required…"}
+                placeholderTextColor="rgba(255,255,255,0.45)"
+                style={styles.input}
+                multiline
+                returnKeyType="send"
+                editable={!sending && aiAllowed}
+                onSubmitEditing={() => {
+                  if (canSend) onSend();
+                }}
+                blurOnSubmit={false}
+                onFocus={() => {
+                  // If they focus the input, assume they want to continue chatting
+                  setShowResolvedPrompt(false);
+                }}
+              />
 
-            <Pressable
-              onPress={onSend}
-              disabled={!canSend || sending || !aiAllowed}
-              style={({ pressed }) => [
-                styles.sendBtn,
-                (!canSend || sending || !aiAllowed) && styles.sendBtnDisabled,
-                pressed && canSend && !sending && aiAllowed && { opacity: 0.9, transform: [{ scale: 0.99 }] },
-              ]}
-            >
-              <Text style={styles.sendText}>{sending ? "…" : "Send"}</Text>
-            </Pressable>
+              <Pressable
+                onPress={onSend}
+                disabled={!canSend || sending || !aiAllowed}
+                style={({ pressed }) => [
+                  styles.sendBtn,
+                  (!canSend || sending || !aiAllowed) && styles.sendBtnDisabled,
+                  pressed && canSend && !sending && aiAllowed && { opacity: 0.9, transform: [{ scale: 0.99 }] },
+                ]}
+              >
+                <Text style={styles.sendText}>{sending ? "…" : "Send"}</Text>
+              </Pressable>
+            </View>
           </View>
-        </View>
+        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

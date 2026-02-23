@@ -379,8 +379,8 @@ const sendInFlightRef = useRef(false);
             }}
             ListEmptyComponent={
               <View style={styles.empty}>
-                <Text style={styles.emptyTitle}>No messages yet</Text>
-                <Text style={styles.emptySub}>Send a message and Vinnies will see it here.</Text>
+                <Text style={styles.emptyTitle}>Hello, Thank you for reaching out!</Text>
+                <Text style={styles.emptySub}>Tell us your name here and we will be with you shortly.</Text>
               </View>
             }
           />

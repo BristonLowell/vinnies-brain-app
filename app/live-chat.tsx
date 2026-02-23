@@ -80,7 +80,8 @@ export default function LiveChat() {
   const lastSigRef = useRef<string>("");
 
   // ✅ only call /v1/livechat/opened once per screen mount
-  const didOpenedRef = useRef(false);
+const didOpenedRef = useRef(false);
+const sendInFlightRef = useRef(false);
 
   useEffect(() => {
     if (Platform.OS !== "android") return;
@@ -234,6 +235,10 @@ export default function LiveChat() {
   }
 
   async function send() {
+    // Guard against accidental multi-taps / duplicate triggers
+    if (sendInFlightRef.current) return;
+    sendInFlightRef.current = true;
+
     try {
       if (!sessionId) return;
 
@@ -262,6 +267,7 @@ export default function LiveChat() {
     } catch (e: any) {
       setError(String(e?.message ?? "Failed to send message."));
     } finally {
+      sendInFlightRef.current = false;
       setSending(false);
     }
   }

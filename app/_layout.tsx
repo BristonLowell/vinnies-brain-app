@@ -7,6 +7,7 @@ import type { Session } from "@supabase/supabase-js";
 import { supabase, ensureAnon } from "../src/supabase";
 import { setCurrentUserId, clearCurrentUserId } from "../src/api";
 import { loginBillingUser } from "../src/billing";
+import * as Notifications from "expo-notifications";
 
 const BRAND = {
   bg: "#071018",
@@ -40,12 +41,23 @@ function FullscreenLoading() {
   );
 }
 
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
+
 export default function Layout() {
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
 
   // Prevent double-init in strict mode / fast refresh
   const initialized = useRef(false);
+
+
 
   useEffect(() => {
     if (initialized.current) return;

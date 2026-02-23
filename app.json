@@ -3,7 +3,7 @@
     "name": "Vinnie’s Brain",
     "owner": "vinnies",
     "slug": "vinnies-brain-app",
-    "version": "1.0.7",
+    "version": "1.0.8",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "vinniesbrainapp",
@@ -12,7 +12,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.vinnies.vinniesbrain",
-      "buildNumber": "82",
+      "buildNumber": "83",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }

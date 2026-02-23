@@ -3,7 +3,7 @@
     "name": "Vinnie’s Brain",
     "owner": "vinnies",
     "slug": "vinnies-brain-app",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "vinniesbrainapp",

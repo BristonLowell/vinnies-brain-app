@@ -863,19 +863,20 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 14,
     overflow: "hidden",
-    backgroundColor: "rgba(0,0,0,0.04)",
+    backgroundColor: "rgba(4,53,83,0.12)",      // subtle navy tint
     borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.06)",
+    borderColor: "rgba(4,53,83,0.35)",         // darker border
   },
   headerBackIcon: {
     fontSize: 18,
     lineHeight: 18,
-    color: BRAND.lightText,
+    color: BRAND.lightText, // ✅ visible
     marginTop: -1,
   },
+
   headerBackText: {
-    color: BRAND.lightText,
-    fontWeight: "600", // ✅ not bold
+    color: BRAND.lightText, // ✅ visible
+    fontWeight: "600",
     letterSpacing: 0.2,
     fontSize: 14,
   },

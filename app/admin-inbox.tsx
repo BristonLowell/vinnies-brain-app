@@ -34,7 +34,6 @@ import {
 import { API_BASE_URL } from "../src/config";
 
 // ✅ OPTION A: put your Supabase user UUID here (same value as Render env OWNER_SUPABASE_USER_ID)
-const OWNER_ID = "PASTE_YOUR_SUPABASE_USER_UUID_HERE";
 
 const BRAND = {
   bg: "#0B0F14",
@@ -62,8 +61,9 @@ Notifications.setNotificationHandler({
   }),
 });
 
-async function registerForPushAndSendToBackend(ownerId: string) {
-  if (!ownerId || ownerId.includes("PASTE_YOUR")) return;
+async function registerForPushAndSendToBackend(adminKey: string) {
+  const key = (adminKey || "").trim();
+  if (!key) return;
   if (!Device.isDevice) return;
 
   const existing = await Notifications.getPermissionsAsync();
@@ -73,7 +73,6 @@ async function registerForPushAndSendToBackend(ownerId: string) {
     const req = await Notifications.requestPermissionsAsync();
     status = req.status;
   }
-
   if (status !== "granted") return;
 
   if (Platform.OS === "android") {
@@ -90,10 +89,14 @@ async function registerForPushAndSendToBackend(ownerId: string) {
   const tokenResp = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
   const expoPushToken = tokenResp.data;
 
-  await fetch(`${API_BASE_URL}/v1/owner/push-token`, {
+  // ✅ use admin-key authenticated endpoint
+  await fetch(`${API_BASE_URL}/v1/admin/push-token`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ owner_id: ownerId, expo_push_token: expoPushToken }),
+    headers: {
+      "Content-Type": "application/json",
+      "X-Admin-Key": key,
+    },
+    body: JSON.stringify({ expo_push_token: expoPushToken }),
   });
 }
 
@@ -196,12 +199,12 @@ export default function AdminInbox() {
 
     (async () => {
       try {
-        await registerForPushAndSendToBackend(OWNER_ID);
+        await registerForPushAndSendToBackend(adminKey.trim());
       } catch {
         // don't block inbox if push fails
       }
     })();
-  }, [hasKey]);
+  }, [hasKey, adminKey]);
 
   async function applyKey() {
     const k = keyDraft.trim();

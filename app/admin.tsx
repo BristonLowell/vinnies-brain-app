@@ -16,8 +16,10 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
+import * as Notifications from "expo-notifications";
+import * as Device from "expo-device";
 import { API_BASE_URL } from "../src/config";
-import { getSavedAdminKey } from "../src/api";
+import { getSavedAdminKey, registerAdminPushToken } from "../src/api";
 
 /**
  * decision_tree shape expected by backend:
@@ -41,6 +43,9 @@ type DecisionTreeV1 = {
 const END_TARGETS = ["end_done", "end_escalate", "end_not_applicable"] as const;
 
 const ADMIN_DRAFT_STORAGE_V3 = "vinnies_admin_article_draft_v3_tree_ui";
+
+// Push notifications (Option A)
+const ADMIN_PUSH_TOKEN_CACHE_KEY = "vinnies_admin_expo_push_token_v1";
 
 function safeJsonParse(s: string) {
   const t = (s || "").trim();
@@ -248,6 +253,35 @@ function shortText(s: string, n: number) {
   return t.length > n ? `${t.slice(0, n)}…` : t;
 }
 
+async function registerForPushAsync(): Promise<string | null> {
+  try {
+    if (!Device.isDevice) return null;
+
+    const perm = await Notifications.getPermissionsAsync();
+    let status = perm.status;
+
+    if (status !== "granted") {
+      const req = await Notifications.requestPermissionsAsync();
+      status = req.status;
+    }
+
+    if (status !== "granted") return null;
+
+    const token = (await Notifications.getExpoPushTokenAsync()).data;
+
+    if (Platform.OS === "android") {
+      await Notifications.setNotificationChannelAsync("default", {
+        name: "default",
+        importance: Notifications.AndroidImportance.MAX,
+      });
+    }
+
+    return token || null;
+  } catch {
+    return null;
+  }
+}
+
 export default function Admin() {
   const router = useRouter();
 
@@ -307,6 +341,34 @@ export default function Admin() {
       }
     })();
   }, []);
+
+  // ✅ Register this admin device for push notifications (Option A)
+  useEffect(() => {
+    if (!adminKeyReady) return;
+    const key = (adminKey || "").trim();
+    if (!key) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const token = await registerForPushAsync();
+        if (cancelled || !token) return;
+
+        const cached = (await AsyncStorage.getItem(ADMIN_PUSH_TOKEN_CACHE_KEY)) || "";
+        if (cached.trim() === token.trim()) return;
+
+        await registerAdminPushToken(key, token);
+        await AsyncStorage.setItem(ADMIN_PUSH_TOKEN_CACHE_KEY, token.trim());
+      } catch {
+        // Don’t block admin UI if push registration fails
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [adminKeyReady, adminKey]);
 
   // Draft restore (v3)
   useEffect(() => {

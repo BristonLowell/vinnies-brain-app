@@ -275,7 +275,19 @@ export async function registerOwnerPushToken(ownerId: string, expoPushToken: str
   });
 }
 
-// Call when user opens live chat to:
+export async function registerAdminPushToken(adminKey: string, expoPushToken: string) {
+  const key = (adminKey || "").trim();
+  const token = (expoPushToken || "").trim();
+  if (!key) throw new Error("Missing admin key");
+  if (!token) throw new Error("Missing Expo push token");
+
+  return await http<{ ok: boolean }>("/v1/admin/push-token", {
+    headers: { "X-Admin-Key": key },
+    body: { expo_push_token: token },
+  });
+}
+
+ // Call when user opens live chat to:
 // - create a system message: "We will be with you shortly."
 // - notify/admin-bump the conversation
 export async function liveChatOpened(sessionId: string) {

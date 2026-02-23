@@ -30,6 +30,13 @@ const BRAND = {
   text: "rgba(255,255,255,0.92)",
   muted: "rgba(255,255,255,0.70)",
   faint: "rgba(255,255,255,0.45)",
+
+  // ✅ lighter, easier-to-read (used on key UI)
+  lightBg: "#F6F7F9",
+  lightSurface: "#FFFFFF",
+  lightBorder: "rgba(0,0,0,0.10)",
+  lightText: "#101828",
+  lightMuted: "rgba(16,24,40,0.70)",
 };
 
 type CheckpointSummary = {
@@ -583,15 +590,15 @@ export default function Chat() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle="dark-content" />
 
       <Stack.Screen
         options={{
           headerShown: true,
           title: "",
           headerShadowVisible: false,
-          headerStyle: { backgroundColor: BRAND.bg },
-          headerTintColor: BRAND.cream,
+          headerStyle: { backgroundColor: BRAND.lightBg },
+          headerTintColor: BRAND.lightText,
           gestureEnabled: false,
           headerLeft: () => (
             <Pressable
@@ -632,7 +639,6 @@ export default function Chat() {
                 (showResolvedPrompt ? 96 : INPUT_BAR_EST_HEIGHT + 16),
             },
           ]}
-
           keyboardShouldPersistTaps="always"
           keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
           onTouchStart={Keyboard.dismiss}
@@ -675,8 +681,8 @@ export default function Chat() {
         />
 
         {/* ✅ Escalation CTAs */}
-        {showEscalationCTAs && (
-          businessHours === true ? (
+        {showEscalationCTAs &&
+          (businessHours === true ? (
             // Business hours: show BOTH buttons side-by-side
             <View style={styles.escalateRow}>
               {showLiveChatCTA && (
@@ -707,24 +713,25 @@ export default function Chat() {
                 </Pressable>
               )}
             </View>
-          ) : (
+          ) : showEmailCTA ? (
             // After hours (or unknown): keep Email full-width
-            showEmailCTA ? (
-              <Pressable
-                style={({ pressed }) => [styles.escalate, pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] }]}
-                onPress={() => confirmEscalation("email")}
-              >
-                <Text style={styles.escalateText}>Email Vinnies</Text>
-                <Text style={styles.escalateSub}>
-                  {businessHours === false
-                    ? `After hours — we’ll attach your chat when you submit.${nextOpen ? ` Next open: ${fmtLocal(nextOpen)}` : ""}`
-                    : "We’ll attach your troubleshooting history when you submit."}
-                </Text>
-              </Pressable>
-            ) : null
-          )
-        )}
-
+            <Pressable
+              style={({ pressed }) => [
+                styles.escalate,
+                pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] },
+              ]}
+              onPress={() => confirmEscalation("email")}
+            >
+              <Text style={styles.escalateText}>Email Vinnies</Text>
+              <Text style={styles.escalateSub}>
+                {businessHours === false
+                  ? `After hours — we’ll attach your chat when you submit.${
+                      nextOpen ? ` Next open: ${fmtLocal(nextOpen)}` : ""
+                    }`
+                  : "We’ll attach your troubleshooting history when you submit."}
+              </Text>
+            </Pressable>
+          ) : null)}
 
         {/* ✅ Resolved prompt (shows after AI replies) */}
         {aiAllowed && !sending && showResolvedPrompt && (
@@ -767,7 +774,10 @@ export default function Chat() {
 
               <Pressable
                 onPress={() => showAiConsentPrompt()}
-                style={({ pressed }) => [styles.lockBtn, pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] }]}
+                style={({ pressed }) => [
+                  styles.lockBtn,
+                  pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] },
+                ]}
               >
                 <Text style={styles.lockBtnText}>Review Permission</Text>
               </Pressable>
@@ -777,7 +787,10 @@ export default function Chat() {
                   setShowResolvedPrompt(false);
                   confirmGoHome();
                 }}
-                style={({ pressed }) => [styles.lockBtnAlt, pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] }]}
+                style={({ pressed }) => [
+                  styles.lockBtnAlt,
+                  pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] },
+                ]}
               >
                 <Text style={styles.lockBtnAltText}>Go Home</Text>
               </Pressable>
@@ -804,7 +817,7 @@ export default function Chat() {
                 value={text}
                 onChangeText={setText}
                 placeholder={aiAllowed ? "Type your message…" : "AI permission required…"}
-                placeholderTextColor="rgba(255,255,255,0.45)"
+                placeholderTextColor={BRAND.lightMuted}
                 style={styles.input}
                 multiline
                 returnKeyType="send"
@@ -839,7 +852,8 @@ export default function Chat() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: BRAND.bg },
+  // ✅ make page light + readable
+  safe: { flex: 1, backgroundColor: BRAND.lightBg },
 
   headerBack: {
     flexDirection: "row",
@@ -849,18 +863,19 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 14,
     overflow: "hidden",
-    backgroundColor: "rgba(255,255,255,0.10)",
-    borderWidth: 0,
+    backgroundColor: "rgba(0,0,0,0.04)",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.06)",
   },
   headerBackIcon: {
     fontSize: 18,
     lineHeight: 18,
-    color: BRAND.cream,
+    color: BRAND.lightText,
     marginTop: -1,
   },
   headerBackText: {
-    color: BRAND.cream,
-    fontWeight: "900",
+    color: BRAND.lightText,
+    fontWeight: "600", // ✅ not bold
     letterSpacing: 0.2,
     fontSize: 14,
   },
@@ -879,61 +894,66 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "rgba(0,0,0,0.04)",
     borderWidth: 1,
-    borderColor: BRAND.border,
+    borderColor: BRAND.lightBorder,
     alignItems: "center",
     justifyContent: "center",
     marginRight: 8,
   },
-  avatarText: { color: BRAND.cream, fontWeight: "900" },
+  avatarText: { color: BRAND.lightText, fontWeight: "600" }, // ✅ not bold
 
   bubble: {
-    maxWidth: "82%",
+    maxWidth: "86%",
     borderRadius: 16,
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderWidth: 1,
-    borderColor: BRAND.border,
+    borderColor: BRAND.lightBorder,
   },
-  userBubble: { backgroundColor: "rgba(4,53,83,0.35)" },
-  aiBubble: { backgroundColor: BRAND.surface },
+  // ✅ lighter bubbles with strong contrast text
+  userBubble: { backgroundColor: "rgba(4,53,83,0.10)" },
+  aiBubble: { backgroundColor: BRAND.lightSurface },
 
-  bubbleText: { fontSize: 15, lineHeight: 20 },
-  userText: { color: BRAND.cream, fontWeight: "700" },
-  aiText: { color: BRAND.text, fontWeight: "700" },
+  bubbleText: { fontSize: 15.5, lineHeight: 21 }, // ✅ slightly bigger, easier
+  userText: { color: BRAND.lightText, fontWeight: "400" }, // ✅ not bold
+  aiText: { color: BRAND.lightText, fontWeight: "400" }, // ✅ not bold
 
-  clarifyingQuestion: { color: BRAND.cream, fontWeight: "900", marginBottom: 6 },
+  clarifyingQuestion: {
+    color: BRAND.lightText,
+    fontWeight: "600", // ✅ not bold-heavy
+    marginBottom: 6,
+  },
 
   typingBubble: { flexDirection: "row", alignItems: "center", gap: 10 },
-  typingText: { color: BRAND.muted, fontWeight: "800" },
+  typingText: { color: BRAND.lightMuted, fontWeight: "500" }, // ✅ not bold
 
   checkpointCard: {
     marginTop: 10,
-    backgroundColor: "rgba(255,255,255,0.04)",
-    borderColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "rgba(0,0,0,0.02)",
+    borderColor: "rgba(0,0,0,0.08)",
     borderWidth: 1,
     borderRadius: 14,
     padding: 10,
   },
-  checkpointTitle: { color: BRAND.cream, fontWeight: "900", marginBottom: 8 },
+  checkpointTitle: { color: BRAND.lightText, fontWeight: "600", marginBottom: 8 }, // ✅ not bold
   checkpointSection: { marginBottom: 8 },
-  checkpointLabel: { color: BRAND.muted, fontWeight: "900", marginBottom: 4 },
-  checkpointItem: { color: BRAND.text, fontWeight: "700", marginBottom: 2 },
+  checkpointLabel: { color: BRAND.lightMuted, fontWeight: "600", marginBottom: 4 }, // ✅ not bold
+  checkpointItem: { color: BRAND.lightText, fontWeight: "400", marginBottom: 2 }, // ✅ not bold
 
   escalate: {
     marginHorizontal: 14,
     marginBottom: 10,
-    backgroundColor: "rgba(4,53,83,0.50)",
-    borderColor: "rgba(255,255,255,0.14)",
+    backgroundColor: "rgba(4,53,83,0.10)",
+    borderColor: "rgba(0,0,0,0.10)",
     borderWidth: 1,
     borderRadius: 18,
     padding: 14,
   },
-  escalateText: { color: BRAND.cream, fontWeight: "900", fontSize: 16 },
-  escalateSub: { color: BRAND.muted, marginTop: 6, fontWeight: "800" },
+  escalateText: { color: BRAND.lightText, fontWeight: "600", fontSize: 16 }, // ✅ not bold
+  escalateSub: { color: BRAND.lightMuted, marginTop: 6, fontWeight: "400" }, // ✅ not bold
 
-    escalateRow: {
+  escalateRow: {
     flexDirection: "row",
     gap: 10,
     marginHorizontal: 14,
@@ -945,19 +965,18 @@ const styles = StyleSheet.create({
     marginBottom: 0,
   },
 
-
   // ✅ Resolved prompt styles
   resolvedWrap: {
     marginHorizontal: 14,
     padding: 12,
     borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: BRAND.lightSurface,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    borderColor: "rgba(0,0,0,0.10)",
   },
   resolvedText: {
-    color: BRAND.cream,
-    fontWeight: "900",
+    color: BRAND.lightText,
+    fontWeight: "600", // ✅ not bold
     fontSize: 15,
     marginBottom: 10,
   },
@@ -973,16 +992,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   resolvedNo: {
-    backgroundColor: "rgba(255,255,255,0.04)",
-    borderColor: "rgba(255,255,255,0.14)",
+    backgroundColor: "rgba(0,0,0,0.03)",
+    borderColor: "rgba(0,0,0,0.12)",
   },
   resolvedYes: {
-    backgroundColor: "rgba(4,53,83,0.55)",
-    borderColor: "rgba(241,238,219,0.28)",
+    backgroundColor: "rgba(4,53,83,0.12)",
+    borderColor: "rgba(4,53,83,0.22)",
   },
   resolvedBtnText: {
-    color: BRAND.cream,
-    fontWeight: "900",
+    color: BRAND.lightText,
+    fontWeight: "600", // ✅ not bold
     fontSize: 15,
   },
 
@@ -994,15 +1013,15 @@ const styles = StyleSheet.create({
     padding: 10,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: BRAND.border,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    borderColor: "rgba(0,0,0,0.10)",
+    backgroundColor: BRAND.lightSurface,
   },
   input: {
     flex: 1,
     minHeight: 44,
     maxHeight: 140,
-    color: BRAND.cream,
-    fontWeight: "800",
+    color: BRAND.lightText,
+    fontWeight: "400", // ✅ not bold
     paddingHorizontal: 8,
     paddingVertical: 10,
   },
@@ -1012,12 +1031,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.14)",
+    borderColor: "rgba(0,0,0,0.10)",
   },
   sendBtnDisabled: { opacity: 0.5 },
-  sendText: { color: BRAND.cream, fontWeight: "900" },
+  sendText: { color: "#FFFFFF", fontWeight: "600" }, // ✅ not bold
 
-  // ✅ Lock overlay styles
+  // ✅ Lock overlay styles (kept darker so it reads like a modal)
   lockOverlay: {
     position: "absolute",
     left: 0,
@@ -1027,25 +1046,25 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 18,
-    backgroundColor: "rgba(7,16,24,0.85)",
+    backgroundColor: "rgba(7,16,24,0.60)",
   },
   lockCard: {
     width: "100%",
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-    backgroundColor: "rgba(255,255,255,0.06)",
+    borderColor: "rgba(0,0,0,0.10)",
+    backgroundColor: BRAND.lightSurface,
     padding: 16,
   },
   lockTitle: {
-    color: BRAND.cream,
-    fontWeight: "900",
+    color: BRAND.lightText,
+    fontWeight: "700", // slightly stronger for title
     fontSize: 18,
     marginBottom: 10,
   },
   lockBody: {
-    color: BRAND.text,
-    fontWeight: "700",
+    color: BRAND.lightText,
+    fontWeight: "400", // ✅ not bold
     lineHeight: 20,
     marginBottom: 14,
   },
@@ -1055,17 +1074,17 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.14)",
+    borderColor: "rgba(0,0,0,0.10)",
     marginBottom: 10,
   },
-  lockBtnText: { color: BRAND.cream, fontWeight: "900" },
+  lockBtnText: { color: "#FFFFFF", fontWeight: "600" }, // ✅ not bold
   lockBtnAlt: {
-    backgroundColor: "rgba(255,255,255,0.10)",
+    backgroundColor: "rgba(0,0,0,0.04)",
     borderRadius: 14,
     paddingVertical: 12,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.14)",
+    borderColor: "rgba(0,0,0,0.10)",
   },
-  lockBtnAltText: { color: BRAND.cream, fontWeight: "900" },
+  lockBtnAltText: { color: BRAND.lightText, fontWeight: "600" }, // ✅ not bold
 });

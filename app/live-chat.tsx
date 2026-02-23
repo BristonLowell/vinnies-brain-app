@@ -347,7 +347,7 @@ const sendInFlightRef = useRef(false);
           <FlatList
             ref={listRef}
             data={messages}
-            keyExtractor={(m) => m.id}
+            keyExtractor={(m, idx) => String((m as any).id ?? `${(m as any).created_at ?? "t"}-${idx}`)}
             contentContainerStyle={[
               styles.list,
               { paddingBottom: INPUT_BAR_EST_HEIGHT + 16 + safeBottom },
@@ -362,23 +362,17 @@ const sendInFlightRef = useRef(false);
               />
             }
             renderItem={({ item }) => {
-              const mine = item.sender_role === "customer";
-              const isSystem = item.sender_role === "system";
+              const role = String((item as any).sender_role || "").trim().toLowerCase();
+              const mine = role === "customer";
+              const isSystem = role === "system";
               const showImg = !isSystem && isDataImage(item.body);
 
               return (
-                <View
-                  style={[
-                    styles.bubble,
-                    mine ? styles.mine : isSystem ? styles.system : styles.theirs,
-                  ]}
-                >
+                <View style={[styles.bubble, mine ? styles.mine : isSystem ? styles.system : styles.theirs]}>
                   {showImg ? (
                     <Image source={{ uri: item.body }} style={styles.msgImage} />
                   ) : (
-                    <Text style={[styles.msgText, isSystem ? styles.systemText : null]}>
-                      {item.body}
-                    </Text>
+                    <Text style={[styles.msgText, isSystem ? styles.systemText : null]}>{item.body}</Text>
                   )}
                 </View>
               );

@@ -56,6 +56,7 @@ type ChatItem = {
     showEscalation?: boolean;
     clarifyingQuestion?: string;
     checkpointSummary?: CheckpointSummary;
+    troubleshootingTurn?: boolean;
   };
 };
 
@@ -459,13 +460,13 @@ export default function Chat() {
   const aiAllowed = aiConsent === "allow";
   const canSend = useMemo(() => aiAllowed && !sending && text.trim().length > 0, [aiAllowed, sending, text]);
 
-  // Count turns
-  const assistantTurns = useMemo(() => {
-    const total = items.filter((x) => x.role === "assistant").length;
-    return Math.max(0, total - 1);
+  // Count only actual troubleshooting/advice responses for escalation.
+  // Intake questions, the opening greeting, and server-error messages do not count.
+  const troubleshootingTurns = useMemo(() => {
+    return items.filter((x) => x.role === "assistant" && !!x.meta?.troubleshootingTurn).length;
   }, [items]);
 
-  const escalationEligibleByAiPrompts = assistantTurns >= 3;
+  const escalationEligibleByAiPrompts = troubleshootingTurns >= 3;
 
   async function sendAndAppend(sid: string, message: string) {
     const res = await sendChat(sid, message, year);
@@ -477,6 +478,9 @@ export default function Chat() {
         : "";
 
     const checkpointSummary = (res as any).checkpoint_summary as CheckpointSummary | undefined;
+    const hasClarifyingQuestion = clarifyingQuestion.trim().length > 0;
+    const se = !!(res as any).show_escalation;
+    const isTroubleshootingTurn = se && !hasClarifyingQuestion;
 
     setItems((prev) => [
       ...prev,
@@ -485,26 +489,24 @@ export default function Chat() {
         text: (res as any).answer,
         meta: {
           usedArticles,
-          showEscalation: !!(res as any).show_escalation,
+          showEscalation: se,
           clarifyingQuestion,
           checkpointSummary,
+          troubleshootingTurn: isTroubleshootingTurn,
         },
       },
     ]);
 
-    const se = !!(res as any).show_escalation;
     setShowEscalate(se);
 
-    // ✅ If the AI is asking a clarifying/intake question, keep the conversation going.
-    // Don't show "Is your problem resolved?" until the AI has moved into actual troubleshooting.
-    const hasClarifyingQuestion = clarifyingQuestion.trim().length > 0;
     if (hasClarifyingQuestion) {
+      // The AI is still gathering details, so do not ask whether the issue is resolved yet.
       setShowResolvedPrompt(false);
       requestAnimationFrame(() => inputRef.current?.focus());
       return;
     }
 
-    // ✅ After troubleshooting advice, ask if resolved (hide keyboard so they see it)
+    // ✅ After actual troubleshooting advice, ask if resolved (hide keyboard so they see it)
     Keyboard.dismiss();
     inputRef.current?.blur();
     setShowResolvedPrompt(true);
@@ -617,6 +619,7 @@ export default function Chat() {
             </View>
           ),
           headerShadowVisible: false,
+          headerBackVisible: false,
           headerStyle: { backgroundColor: BRAND.headerBg },
           headerTintColor: BRAND.lightText,
           gestureEnabled: false,
@@ -892,16 +895,14 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
 
-  // ✅ one clean Home button — no double outline
+  // ✅ plain Home control — no bubble/background, and native back bubble is disabled above
   headerBack: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 12,
+    gap: 5,
+    paddingHorizontal: 4,
     paddingVertical: 8,
-    borderRadius: 14,
-    overflow: "hidden",
-    backgroundColor: BRAND.navySoft,
+    backgroundColor: "transparent",
   },
   headerBackIcon: {
     fontSize: 18,

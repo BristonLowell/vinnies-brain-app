@@ -26,6 +26,7 @@ const BRAND = {
   surface: "rgba(255,255,255,0.06)",
   border: "rgba(255,255,255,0.10)",
   navy: "#043553",
+  navySoft: "#E8F0F5",
   cream: "#F1EEDB",
   text: "rgba(255,255,255,0.92)",
   muted: "rgba(255,255,255,0.70)",
@@ -37,6 +38,7 @@ const BRAND = {
   lightBorder: "rgba(0,0,0,0.10)",
   lightText: "#101828",
   lightMuted: "rgba(16,24,40,0.70)",
+  headerBg: "#FFFFFF",
 };
 
 type CheckpointSummary = {
@@ -493,7 +495,16 @@ export default function Chat() {
     const se = !!(res as any).show_escalation;
     setShowEscalate(se);
 
-    // ✅ After AI responds, ask if resolved (hide keyboard so they see it)
+    // ✅ If the AI is asking a clarifying/intake question, keep the conversation going.
+    // Don't show "Is your problem resolved?" until the AI has moved into actual troubleshooting.
+    const hasClarifyingQuestion = clarifyingQuestion.trim().length > 0;
+    if (hasClarifyingQuestion) {
+      setShowResolvedPrompt(false);
+      requestAnimationFrame(() => inputRef.current?.focus());
+      return;
+    }
+
+    // ✅ After troubleshooting advice, ask if resolved (hide keyboard so they see it)
     Keyboard.dismiss();
     inputRef.current?.blur();
     setShowResolvedPrompt(true);
@@ -590,14 +601,23 @@ export default function Chat() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
-      <StatusBar barStyle="dark-content" />
+      <StatusBar barStyle="dark-content" backgroundColor={BRAND.headerBg} />
 
       <Stack.Screen
         options={{
           headerShown: true,
           title: "",
+          headerTitleAlign: "center",
+          headerTitle: () => (
+            <View style={styles.headerTitleWrap}>
+              <Text style={styles.headerTitleText}>Vinnie’s Brain</Text>
+              <Text style={styles.headerSubtitleText}>
+                {year ? `${year} Airstream troubleshooting` : "Airstream troubleshooting"}
+              </Text>
+            </View>
+          ),
           headerShadowVisible: false,
-          headerStyle: { backgroundColor: BRAND.lightBg },
+          headerStyle: { backgroundColor: BRAND.headerBg },
           headerTintColor: BRAND.lightText,
           gestureEnabled: false,
           headerLeft: () => (
@@ -855,6 +875,24 @@ const styles = StyleSheet.create({
   // ✅ make page light + readable
   safe: { flex: 1, backgroundColor: BRAND.lightBg },
 
+  headerTitleWrap: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerTitleText: {
+    color: BRAND.lightText,
+    fontSize: 17,
+    fontWeight: "700",
+    letterSpacing: 0.1,
+  },
+  headerSubtitleText: {
+    color: BRAND.lightMuted,
+    fontSize: 11.5,
+    fontWeight: "500",
+    marginTop: 1,
+  },
+
+  // ✅ one clean Home button — no double outline
   headerBack: {
     flexDirection: "row",
     alignItems: "center",
@@ -863,19 +901,17 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 14,
     overflow: "hidden",
-    backgroundColor: "rgba(4,53,83,0.12)",      // subtle navy tint
-    borderWidth: 1,
-    borderColor: "rgba(4,53,83,0.35)",         // darker border
+    backgroundColor: BRAND.navySoft,
   },
   headerBackIcon: {
     fontSize: 18,
     lineHeight: 18,
-    color: BRAND.lightText, // ✅ visible
+    color: BRAND.navy,
     marginTop: -1,
   },
 
   headerBackText: {
-    color: BRAND.lightText, // ✅ visible
+    color: BRAND.navy,
     fontWeight: "600",
     letterSpacing: 0.2,
     fontSize: 14,

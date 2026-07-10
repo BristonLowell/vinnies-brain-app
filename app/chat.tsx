@@ -95,66 +95,9 @@ function fmtLocal(ts?: string) {
   return d.toLocaleString();
 }
 
-function renderCheckpointSummary(summary?: CheckpointSummary) {
-  if (!summary) return null;
-
-  const hasAny =
-    (summary.known && summary.known.length > 0) ||
-    (summary.ruled_out && summary.ruled_out.length > 0) ||
-    (summary.likely_causes && summary.likely_causes.length > 0) ||
-    (summary.next_checks && summary.next_checks.length > 0);
-
-  if (!hasAny) return null;
-
-  return (
-    <View style={styles.checkpointCard}>
-      <Text style={styles.checkpointTitle}>What we know so far</Text>
-
-      {!!summary.known?.length && (
-        <View style={styles.checkpointSection}>
-          <Text style={styles.checkpointLabel}>Confirmed</Text>
-          {summary.known.map((s, i) => (
-            <Text key={`k_${i}`} style={styles.checkpointItem}>
-              • {s}
-            </Text>
-          ))}
-        </View>
-      )}
-
-      {!!summary.ruled_out?.length && (
-        <View style={styles.checkpointSection}>
-          <Text style={styles.checkpointLabel}>Ruled out</Text>
-          {summary.ruled_out.map((s, i) => (
-            <Text key={`r_${i}`} style={styles.checkpointItem}>
-              • {s}
-            </Text>
-          ))}
-        </View>
-      )}
-
-      {!!summary.likely_causes?.length && (
-        <View style={styles.checkpointSection}>
-          <Text style={styles.checkpointLabel}>Likely causes</Text>
-          {summary.likely_causes.map((s, i) => (
-            <Text key={`c_${i}`} style={styles.checkpointItem}>
-              • {s}
-            </Text>
-          ))}
-        </View>
-      )}
-
-      {!!summary.next_checks?.length && (
-        <View style={styles.checkpointSection}>
-          <Text style={styles.checkpointLabel}>Next checks</Text>
-          {summary.next_checks.map((s, i) => (
-            <Text key={`n_${i}`} style={styles.checkpointItem}>
-              • {s}
-            </Text>
-          ))}
-        </View>
-      )}
-    </View>
-  );
+function renderCheckpointSummary(_summary?: CheckpointSummary) {
+  // Checkpoint summaries were removed from the chat UI.
+  return null;
 }
 
 export default function Chat() {
@@ -221,8 +164,9 @@ export default function Chat() {
 
   function onResolvedNo() {
     setShowResolvedPrompt(false);
-    // bring keyboard back + focus input
-    requestAnimationFrame(() => inputRef.current?.focus());
+    // Show the input again, but do not automatically reopen the keyboard.
+    Keyboard.dismiss();
+    inputRef.current?.blur();
   }
 
   function onResolvedYes() {
@@ -478,7 +422,6 @@ export default function Chat() {
         : "";
 
     const checkpointSummary = (res as any).checkpoint_summary as CheckpointSummary | undefined;
-    const hasClarifyingQuestion = clarifyingQuestion.trim().length > 0;
     const se = !!(res as any).show_escalation;
     // Prefer the explicit backend flag. Fallback to show_escalation for older backend responses.
     const isTroubleshootingTurn =
@@ -503,19 +446,11 @@ export default function Chat() {
 
     setShowEscalate(se);
 
-    if (hasClarifyingQuestion) {
-      // The AI is still gathering details, so do not ask whether the issue is resolved yet.
-      // Do not automatically reopen the keyboard after the AI responds.
-      Keyboard.dismiss();
-      inputRef.current?.blur();
-      setShowResolvedPrompt(false);
-      return;
-    }
-
-    // ✅ After actual troubleshooting advice, ask if resolved (hide keyboard so they see it)
+    // Only show the resolved prompt after a real troubleshooting/advice response.
+    // Intake questions, question-only follow-ups, greetings, and server errors should not show it.
     Keyboard.dismiss();
     inputRef.current?.blur();
-    setShowResolvedPrompt(true);
+    setShowResolvedPrompt(isTroubleshootingTurn);
   }
 
   async function onSend() {
@@ -963,11 +898,13 @@ const styles = StyleSheet.create({
 
   bubbleText: { fontSize: 15.5, lineHeight: 21 }, // ✅ slightly bigger, easier
   userText: { color: BRAND.lightText, fontWeight: "400" }, // ✅ not bold
-  aiText: { color: BRAND.lightText, fontWeight: "400" }, // ✅ not bold
+  aiText: { color: BRAND.lightText, fontWeight: "400", fontSize: 16.75, lineHeight: 23 }, // ✅ slightly larger AI responses
 
   clarifyingQuestion: {
     color: BRAND.lightText,
     fontWeight: "600", // ✅ not bold-heavy
+    fontSize: 16.25,
+    lineHeight: 22,
     marginBottom: 6,
   },
 

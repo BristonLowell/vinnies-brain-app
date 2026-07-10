@@ -333,7 +333,7 @@ export default function Chat() {
 
   useEffect(() => {
     scrollToBottom(true);
-  }, [items.length, scrollToBottom]);
+  }, [items.length, showResolvedPrompt, scrollToBottom]);
 
   useEffect(() => {
     let cancelled = false;
@@ -480,7 +480,11 @@ export default function Chat() {
     const checkpointSummary = (res as any).checkpoint_summary as CheckpointSummary | undefined;
     const hasClarifyingQuestion = clarifyingQuestion.trim().length > 0;
     const se = !!(res as any).show_escalation;
-    const isTroubleshootingTurn = se && !hasClarifyingQuestion;
+    // Prefer the explicit backend flag. Fallback to show_escalation for older backend responses.
+    const isTroubleshootingTurn =
+      typeof (res as any).is_troubleshooting_response === "boolean"
+        ? !!(res as any).is_troubleshooting_response
+        : se;
 
     setItems((prev) => [
       ...prev,
@@ -501,8 +505,10 @@ export default function Chat() {
 
     if (hasClarifyingQuestion) {
       // The AI is still gathering details, so do not ask whether the issue is resolved yet.
+      // Do not automatically reopen the keyboard after the AI responds.
+      Keyboard.dismiss();
+      inputRef.current?.blur();
       setShowResolvedPrompt(false);
-      requestAnimationFrame(() => inputRef.current?.focus());
       return;
     }
 
@@ -597,7 +603,8 @@ export default function Chat() {
     );
   }
 
-  const showEscalationCTAs = showEscalate && escalationEligibleByAiPrompts;
+  // Once three troubleshooting turns have happened, keep escalation available.
+  const showEscalationCTAs = escalationEligibleByAiPrompts;
   const showLiveChatCTA = showEscalationCTAs && businessHours === true;
   const showEmailCTA = showEscalationCTAs;
 
@@ -654,12 +661,12 @@ export default function Chat() {
           contentContainerStyle={[
             styles.listContent,
             {
-              // If resolved prompt is showing, the input bar is hidden, so don't reserve space for it.
+              // If resolved prompt is showing, it is inside the chat list and the input bar is hidden.
               paddingBottom:
                 styles.listContent.paddingBottom +
                 16 +
                 safeBottom +
-                (showResolvedPrompt ? 96 : INPUT_BAR_EST_HEIGHT + 16),
+                (showResolvedPrompt ? 24 : INPUT_BAR_EST_HEIGHT + 16),
             },
           ]}
           keyboardShouldPersistTaps="always"
@@ -697,6 +704,35 @@ export default function Chat() {
                 <View style={[styles.bubble, styles.aiBubble, styles.typingBubble]}>
                   <ActivityIndicator />
                   <Text style={styles.typingText}>Thinking…</Text>
+                </View>
+              </View>
+            ) : aiAllowed && showResolvedPrompt ? (
+              <View style={[styles.row, styles.rowLeft, styles.resolvedChatRow]}>
+                <View style={styles.avatarSpacer} />
+                <View style={styles.resolvedWrap}>
+                  <Text style={styles.resolvedText}>Is your issue resolved?</Text>
+                  <View style={styles.resolvedBtns}>
+                    <Pressable
+                      onPress={onResolvedNo}
+                      style={({ pressed }) => [
+                        styles.resolvedBtn,
+                        styles.resolvedNo,
+                        pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] },
+                      ]}
+                    >
+                      <Text style={styles.resolvedBtnText}>No</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={onResolvedYes}
+                      style={({ pressed }) => [
+                        styles.resolvedBtn,
+                        styles.resolvedYes,
+                        pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] },
+                      ]}
+                    >
+                      <Text style={styles.resolvedBtnText}>Yes</Text>
+                    </Pressable>
+                  </View>
                 </View>
               </View>
             ) : null
@@ -756,34 +792,6 @@ export default function Chat() {
             </Pressable>
           ) : null)}
 
-        {/* ✅ Resolved prompt (shows after AI replies) */}
-        {aiAllowed && !sending && showResolvedPrompt && (
-          <View style={[styles.resolvedWrap, { marginBottom: 10 }]}>
-            <Text style={styles.resolvedText}>Is your problem resolved?</Text>
-            <View style={styles.resolvedBtns}>
-              <Pressable
-                onPress={onResolvedNo}
-                style={({ pressed }) => [
-                  styles.resolvedBtn,
-                  styles.resolvedNo,
-                  pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] },
-                ]}
-              >
-                <Text style={styles.resolvedBtnText}>No</Text>
-              </Pressable>
-              <Pressable
-                onPress={onResolvedYes}
-                style={({ pressed }) => [
-                  styles.resolvedBtn,
-                  styles.resolvedYes,
-                  pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] },
-                ]}
-              >
-                <Text style={styles.resolvedBtnText}>Yes</Text>
-              </Pressable>
-            </View>
-          </View>
-        )}
 
         {/* ✅ If consent denied, hard-lock the chat UI */}
         {!aiAllowed && (
@@ -821,7 +829,7 @@ export default function Chat() {
           </View>
         )}
 
-        {/* ✅ Chat input (hide it while the resolved prompt is showing) */}
+        {/* ✅ Chat input (hide it while the resolved prompt is showing in the chat list) */}
         {!showResolvedPrompt && (
           <View
             style={[
@@ -1003,9 +1011,18 @@ const styles = StyleSheet.create({
     marginBottom: 0,
   },
 
-  // ✅ Resolved prompt styles
+  // ✅ Resolved prompt styles — rendered inside the chat list
+  resolvedChatRow: {
+    marginTop: 2,
+    marginBottom: 10,
+  },
+  avatarSpacer: {
+    width: 34,
+    marginRight: 8,
+  },
   resolvedWrap: {
-    marginHorizontal: 14,
+    maxWidth: "86%",
+    flex: 1,
     padding: 12,
     borderRadius: 18,
     backgroundColor: BRAND.lightSurface,

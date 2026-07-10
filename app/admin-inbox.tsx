@@ -115,6 +115,23 @@ function SkeletonRow() {
   );
 }
 
+function DeleteXButton({ onPress, label }: { onPress: () => void; label: string }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      onPress={(e) => {
+        e.stopPropagation();
+        onPress();
+      }}
+      style={({ pressed }) => [styles.deleteXBtn, pressed && { opacity: 0.82, transform: [{ scale: 0.96 }] }]}
+      hitSlop={12}
+    >
+      <Text style={styles.deleteXText}>×</Text>
+    </Pressable>
+  );
+}
+
 export default function AdminInbox() {
   const router = useRouter();
 
@@ -267,6 +284,33 @@ export default function AdminInbox() {
     );
   }
 
+  async function confirmDeleteEscalation(escalationId: string) {
+    Alert.alert(
+      "Delete escalation?",
+      "This permanently deletes this escalation request.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const r = await fetch(`${API_BASE_URL}/v1/admin/escalations/${encodeURIComponent(escalationId)}`, {
+                method: "DELETE",
+                headers: { "X-Admin-Key": adminKey.trim() },
+              });
+
+              if (!r.ok) throw new Error(await r.text());
+              await load(true);
+            } catch (e: any) {
+              setError(String(e?.message ?? "Delete failed."));
+            }
+          },
+        },
+      ]
+    );
+  }
+
   const filteredLive = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return liveItems;
@@ -330,13 +374,10 @@ export default function AdminInbox() {
           {!!last?.created_at && <Text style={styles.rowMeta}>{fmt(last.created_at)}</Text>}
         </View>
 
-        <Pressable
+        <DeleteXButton
+          label="Delete live chat"
           onPress={() => confirmDeleteLive(item.conversation_id)}
-          style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.85 }]}
-          hitSlop={10}
-        >
-          <Text style={styles.deleteText}>Delete</Text>
-        </Pressable>
+        />
 
         <Text style={styles.chev}>›</Text>
       </Pressable>
@@ -370,13 +411,10 @@ export default function AdminInbox() {
           {!!item.last_message_at && <Text style={styles.rowMeta}>{fmt(item.last_message_at)}</Text>}
         </View>
 
-        <Pressable
+        <DeleteXButton
+          label="Delete AI session"
           onPress={() => confirmDeleteSession(item.session_id)}
-          style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.85 }]}
-          hitSlop={10}
-        >
-          <Text style={styles.deleteText}>Delete</Text>
-        </Pressable>
+        />
 
         <Text style={styles.chev}>›</Text>
       </Pressable>
@@ -457,6 +495,11 @@ export default function AdminInbox() {
         </View>
 
         <View style={{ gap: 8, alignItems: "flex-end" }}>
+          <DeleteXButton
+            label="Delete escalation"
+            onPress={() => confirmDeleteEscalation(String(item.id))}
+          />
+
           {status !== "in_progress" && status !== "closed" && (
             <Pressable
               onPress={() => setEscStatus(String(item.id), "in_progress")}
@@ -756,17 +799,23 @@ const styles = StyleSheet.create({
   rowSub: { color: "rgba(255,255,255,0.70)", lineHeight: 18 },
   rowMeta: { color: "rgba(255,255,255,0.45)", fontSize: 12, fontWeight: "700" },
 
-  deleteBtn: {
-    height: 32,
-    paddingHorizontal: 10,
-    borderRadius: 10,
-    backgroundColor: "rgba(239,68,68,0.16)",
+  deleteXBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 999,
+    backgroundColor: "rgba(239,68,68,0.18)",
     borderWidth: 1,
-    borderColor: "rgba(239,68,68,0.28)",
+    borderColor: "rgba(239,68,68,0.35)",
     alignItems: "center",
     justifyContent: "center",
   },
-  deleteText: { color: "white", fontWeight: "900", fontSize: 12 },
+  deleteXText: {
+    color: "white",
+    fontWeight: "900",
+    fontSize: 20,
+    lineHeight: 22,
+    marginTop: -1,
+  },
 
   statusPill: {
     paddingHorizontal: 10,

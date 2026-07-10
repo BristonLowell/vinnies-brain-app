@@ -44,6 +44,9 @@ type AiMeta = {
 
 type AiHistoryResponse = {
   messages?: AiMsg[];
+  troubleshooting_summary?: string | null;
+  airstream_year?: number | null;
+  category?: string | null;
   active_article_id?: string | null;
   active_node_id?: string | null;
   active_node_text?: string | null;
@@ -87,6 +90,7 @@ export default function AdminChat() {
   const [showAi, setShowAi] = useState<boolean>(false);
   const [aiExpanded, setAiExpanded] = useState<boolean>(false);
   const [aiMessages, setAiMessages] = useState<AiMsg[]>([]);
+  const [aiSummary, setAiSummary] = useState<string>("");
   const [aiMeta, setAiMeta] = useState<AiMeta>({});
   const [aiLoading, setAiLoading] = useState<boolean>(false);
   const [aiError, setAiError] = useState<string>("");
@@ -141,6 +145,7 @@ export default function AdminChat() {
           .map(({ __i, ...m }: any) => m as AiMsg);
 
         setAiMessages(msgs);
+        setAiSummary(String(data?.troubleshooting_summary ?? "").trim());
 
         setAiMeta({
           active_article_id: data?.active_article_id ?? null,
@@ -151,6 +156,7 @@ export default function AdminChat() {
         });
       } catch (e: any) {
         setAiError(String(e?.message ?? "Failed to load AI history."));
+        setAiSummary("");
         setAiMeta({});
       } finally {
         setAiLoading(false);
@@ -241,11 +247,12 @@ export default function AdminChat() {
   // Preview vs full transcript
   const previewCount = 10;
   const aiPreview = aiMessages.length > previewCount ? aiMessages.slice(-previewCount) : aiMessages;
+  const hasAiSummary = aiSummary.trim().length > 0;
 
   const AiHeader = (
     <View style={styles.aiWrap}>
       <View style={styles.aiTopRow}>
-        <Text style={styles.aiTitle}>AI Chat (User ↔ AI)</Text>
+        <Text style={styles.aiTitle}>Troubleshooting Summary</Text>
 
         <View style={styles.aiTopBtns}>
           <Pressable
@@ -258,7 +265,7 @@ export default function AdminChat() {
             }}
             style={({ pressed }) => [styles.aiBtn, pressed && { opacity: 0.85 }]}
           >
-            <Text style={styles.aiBtnText}>{showAi ? "Close" : "Open"}</Text>
+            <Text style={styles.aiBtnText}>{showAi ? "Hide transcript" : "Transcript"}</Text>
           </Pressable>
 
           {showAi && aiMessages.length > previewCount && (
@@ -273,37 +280,48 @@ export default function AdminChat() {
       </View>
 
       {aiLoading ? (
-        <Text style={styles.aiSub}>Loading…</Text>
+        <Text style={styles.aiSub}>Loading summary…</Text>
       ) : aiError ? (
         <Text style={styles.aiErr}>{aiError}</Text>
-      ) : !showAi ? (
-        <Text style={styles.aiSub}>Tap “Open” to view the full AI transcript.</Text>
-      ) : aiMessages.length === 0 ? (
-        <Text style={styles.aiSub}>No AI messages saved yet.</Text>
       ) : (
-        <View style={styles.aiTranscriptCard}>
-          <ScrollView
-            style={[styles.aiScroll, { maxHeight: aiExpanded ? 520 : 240 }]}
-            contentContainerStyle={{ paddingBottom: 10 }}
-            nestedScrollEnabled
-          >
-            {(aiExpanded ? aiMessages : aiPreview).map((m, idx) => (
-              <View key={`${idx}-${m.created_at ?? ""}`} style={styles.aiMsgRow}>
-                <View style={styles.aiMsgHeader}>
-                  <Text style={styles.aiRole}>{m.role === "assistant" ? "AI" : "User"}</Text>
-                  {!!m.created_at && <Text style={styles.aiTime}>{fmt(m.created_at)}</Text>}
-                </View>
-                <Text style={styles.aiText}>{m.text}</Text>
-              </View>
-            ))}
+        <>
+          <View style={styles.aiSummaryCard}>
+            <Text style={styles.aiSummaryLabel}>Quick read</Text>
+            <Text style={styles.aiSummaryText}>
+              {hasAiSummary ? aiSummary : "No troubleshooting summary is available yet."}
+            </Text>
+          </View>
 
-            {!aiExpanded && aiMessages.length > previewCount ? (
-              <Text style={styles.aiHint}>
-                Showing last {previewCount}. Tap “Full chat” to view everything.
-              </Text>
-            ) : null}
-          </ScrollView>
-        </View>
+          {!showAi ? (
+            <Text style={styles.aiSub}>Tap “Transcript” only if you need the full AI chat.</Text>
+          ) : aiMessages.length === 0 ? (
+            <Text style={styles.aiSub}>No AI messages saved yet.</Text>
+          ) : (
+            <View style={styles.aiTranscriptCard}>
+              <ScrollView
+                style={[styles.aiScroll, { maxHeight: aiExpanded ? 520 : 240 }]}
+                contentContainerStyle={{ paddingBottom: 10 }}
+                nestedScrollEnabled
+              >
+                {(aiExpanded ? aiMessages : aiPreview).map((m, idx) => (
+                  <View key={`${idx}-${m.created_at ?? ""}`} style={styles.aiMsgRow}>
+                    <View style={styles.aiMsgHeader}>
+                      <Text style={styles.aiRole}>{m.role === "assistant" ? "AI" : "User"}</Text>
+                      {!!m.created_at && <Text style={styles.aiTime}>{fmt(m.created_at)}</Text>}
+                    </View>
+                    <Text style={styles.aiText}>{m.text}</Text>
+                  </View>
+                ))}
+
+                {!aiExpanded && aiMessages.length > previewCount ? (
+                  <Text style={styles.aiHint}>
+                    Showing last {previewCount}. Tap “Full chat” to view everything.
+                  </Text>
+                ) : null}
+              </ScrollView>
+            </View>
+          )}
+        </>
       )}
     </View>
   );
@@ -541,6 +559,22 @@ const styles = StyleSheet.create({
 
   aiSub: { marginTop: 6, color: "rgba(255,255,255,0.55)", fontWeight: "700", fontSize: 12 },
   aiErr: { marginTop: 6, color: "rgba(255,90,90,0.95)", fontWeight: "800", fontSize: 12 },
+
+  aiSummaryCard: {
+    marginTop: 10,
+    borderRadius: 16,
+    backgroundColor: "rgba(241,238,219,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(241,238,219,0.16)",
+    padding: 12,
+  },
+  aiSummaryLabel: {
+    color: "rgba(241,238,219,0.95)",
+    fontWeight: "900",
+    fontSize: 12,
+    marginBottom: 6,
+  },
+  aiSummaryText: { color: "rgba(255,255,255,0.92)", fontSize: 13, lineHeight: 18 },
 
   aiTranscriptCard: {
     marginTop: 10,

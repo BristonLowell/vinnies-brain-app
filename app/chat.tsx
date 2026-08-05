@@ -100,6 +100,33 @@ function renderCheckpointSummary(_summary?: CheckpointSummary) {
   return null;
 }
 
+function cleanResponseText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getAssistantResponseText(res: any): string {
+  // Support the current API shape plus a few common wrapper/legacy shapes.
+  const candidates = [
+    res?.answer,
+    res?.message,
+    res?.response,
+    res?.content,
+    res?.output_text,
+    res?.data?.answer,
+    res?.data?.message,
+    res?.data?.response,
+    res?.data?.content,
+    res?.data?.output_text,
+  ];
+
+  for (const candidate of candidates) {
+    const cleaned = cleanResponseText(candidate);
+    if (cleaned) return cleaned;
+  }
+
+  return "";
+}
+
 export default function Chat() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -414,26 +441,48 @@ export default function Chat() {
 
   async function sendAndAppend(sid: string, message: string) {
     const res = await sendChat(sid, message, year);
+    const response = res as any;
 
-    const usedArticles = (res as any).used_articles || [];
-    const clarifyingQuestion =
-      Array.isArray((res as any).clarifying_questions) && (res as any).clarifying_questions.length > 0
-        ? (res as any).clarifying_questions[0]
+    const usedArticles = response?.used_articles || response?.data?.used_articles || [];
+    const clarifyingQuestions = response?.clarifying_questions || response?.data?.clarifying_questions;
+    const rawClarifyingQuestion =
+      Array.isArray(clarifyingQuestions) && clarifyingQuestions.length > 0
+        ? cleanResponseText(clarifyingQuestions[0])
         : "";
 
-    const checkpointSummary = (res as any).checkpoint_summary as CheckpointSummary | undefined;
-    const se = !!(res as any).show_escalation;
+    const answer = getAssistantResponseText(response);
+
+    // Some backend responses contain only a clarifying question. Use it as the
+    // visible message rather than creating an assistant bubble with an empty body.
+    const assistantText = answer || rawClarifyingQuestion;
+    const clarifyingQuestion = answer ? rawClarifyingQuestion : "";
+
+    if (!assistantText) {
+      console.warn("Chat API returned an empty assistant response", {
+        topLevelKeys: response && typeof response === "object" ? Object.keys(response) : [],
+        dataKeys:
+          response?.data && typeof response.data === "object" ? Object.keys(response.data) : [],
+      });
+      throw new Error("EMPTY_ASSISTANT_RESPONSE");
+    }
+
+    const checkpointSummary =
+      (response?.checkpoint_summary || response?.data?.checkpoint_summary) as
+        | CheckpointSummary
+        | undefined;
+    const se = !!(response?.show_escalation ?? response?.data?.show_escalation);
+    const troubleshootingFlag =
+      response?.is_troubleshooting_response ?? response?.data?.is_troubleshooting_response;
+
     // Prefer the explicit backend flag. Fallback to show_escalation for older backend responses.
     const isTroubleshootingTurn =
-      typeof (res as any).is_troubleshooting_response === "boolean"
-        ? !!(res as any).is_troubleshooting_response
-        : se;
+      typeof troubleshootingFlag === "boolean" ? troubleshootingFlag : se;
 
     setItems((prev) => [
       ...prev,
       {
         role: "assistant",
-        text: (res as any).answer,
+        text: assistantText,
         meta: {
           usedArticles,
           showEscalation: se,

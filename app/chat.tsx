@@ -57,6 +57,7 @@ type ChatItem = {
     clarifyingQuestion?: string;
     checkpointSummary?: CheckpointSummary;
     troubleshootingTurn?: boolean;
+    answerChoices?: string[];
   };
 };
 
@@ -125,6 +126,33 @@ function getAssistantResponseText(res: any): string {
   }
 
   return "";
+}
+
+function getAnswerChoices(res: any): string[] {
+  const raw = res?.answer_choices ?? res?.data?.answer_choices;
+  if (!Array.isArray(raw)) return [];
+
+  const seen = new Set<string>();
+  const choices: string[] = [];
+
+  for (const value of raw) {
+    const choice = cleanResponseText(value);
+    if (!choice) continue;
+
+    const key = choice.toLowerCase();
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    choices.push(choice);
+  }
+
+  // The backend intentionally does not generate this fallback choice.
+  const unsure = "I’m not sure";
+  if (!seen.has(unsure.toLowerCase())) {
+    choices.push(unsure);
+  }
+
+  return choices;
 }
 
 export default function Chat() {
@@ -466,6 +494,8 @@ export default function Chat() {
       throw new Error("EMPTY_ASSISTANT_RESPONSE");
     }
 
+    const answerChoices = getAnswerChoices(response);
+
     const checkpointSummary =
       (response?.checkpoint_summary || response?.data?.checkpoint_summary) as
         | CheckpointSummary
@@ -489,6 +519,7 @@ export default function Chat() {
           clarifyingQuestion,
           checkpointSummary,
           troubleshootingTurn: isTroubleshootingTurn,
+          answerChoices,
         },
       },
     ]);
@@ -502,8 +533,8 @@ export default function Chat() {
     setShowResolvedPrompt(isTroubleshootingTurn);
   }
 
-  async function onSend() {
-    const msg = text.trim();
+  async function sendMessage(message: string) {
+    const msg = message.trim();
     if (!msg || sending) return;
 
     // ✅ Hide resolved prompt once user continues
@@ -513,7 +544,6 @@ export default function Chat() {
     if (!aiAllowed) {
       const decision = await showAiConsentPrompt();
       if (decision !== "allow") {
-        // Hard block: they can’t use the app without consent
         Alert.alert(
           "AI Permission Required",
           `Vinnie’s Brain requires AI to operate. To use the app, please allow sending your chat content to ${AI_PROVIDER_NAME}.`,
@@ -529,7 +559,24 @@ export default function Chat() {
     setSending(true);
     setText("");
 
-    setItems((prev) => [...prev, { role: "user", text: msg }]);
+    // Remove quick replies from the previous assistant message as soon as one is used.
+    setItems((prev) => {
+      const next = prev.map((item, index) => {
+        if (index !== prev.length - 1 || item.role !== "assistant" || !item.meta?.answerChoices?.length) {
+          return item;
+        }
+
+        return {
+          ...item,
+          meta: {
+            ...item.meta,
+            answerChoices: [],
+          },
+        };
+      });
+
+      return [...next, { role: "user", text: msg }];
+    });
 
     try {
       let sid = sessionId;
@@ -549,13 +596,19 @@ export default function Chat() {
         },
       ]);
       setShowEscalate(true);
-
-      // still offer resolved prompt? probably not when error
       setShowResolvedPrompt(false);
     } finally {
       setSending(false);
       scrollToBottom(true);
     }
+  }
+
+  async function onSend() {
+    await sendMessage(text);
+  }
+
+  async function onQuickReply(choice: string) {
+    await sendMessage(choice);
   }
 
   function confirmEscalation(mode: "livechat" | "email") {
@@ -671,10 +724,36 @@ export default function Chat() {
                   </View>
                 )}
 
-                <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
-                  {!isUser && !!cq && <Text style={styles.clarifyingQuestion}>{cq}</Text>}
-                  <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>{body}</Text>
-                  {!isUser && renderCheckpointSummary(item.meta?.checkpointSummary)}
+                <View style={styles.messageColumn}>
+                  <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
+                    {!isUser && !!cq && <Text style={styles.clarifyingQuestion}>{cq}</Text>}
+                    <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>{body}</Text>
+                    {!isUser && renderCheckpointSummary(item.meta?.checkpointSummary)}
+                  </View>
+
+                  {!isUser && !!item.meta?.answerChoices?.length && (
+                    <View style={styles.quickReplyWrap}>
+                      {item.meta.answerChoices.map((choice) => (
+                        <Pressable
+                          key={choice}
+                          disabled={sending || !aiAllowed}
+                          onPress={() => onQuickReply(choice)}
+                          style={({ pressed }) => [
+                            styles.quickReplyBtn,
+                            (sending || !aiAllowed) && styles.quickReplyBtnDisabled,
+                            pressed &&
+                              !sending &&
+                              aiAllowed && {
+                                opacity: 0.9,
+                                transform: [{ scale: 0.99 }],
+                              },
+                          ]}
+                        >
+                          <Text style={styles.quickReplyText}>{choice}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  )}
                 </View>
               </View>
             );
@@ -920,6 +999,34 @@ const styles = StyleSheet.create({
   rowLeft: { justifyContent: "flex-start" },
   rowRight: { justifyContent: "flex-end" },
 
+  messageColumn: {
+    maxWidth: "86%",
+    flexShrink: 1,
+  },
+
+  quickReplyWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 8,
+  },
+  quickReplyBtn: {
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "rgba(4,53,83,0.22)",
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  quickReplyBtnDisabled: {
+    opacity: 0.55,
+  },
+  quickReplyText: {
+    color: BRAND.navy,
+    fontSize: 14.5,
+    fontWeight: "600",
+  },
+
   avatar: {
     width: 34,
     height: 34,
@@ -934,7 +1041,7 @@ const styles = StyleSheet.create({
   avatarText: { color: BRAND.lightText, fontWeight: "600" }, // ✅ not bold
 
   bubble: {
-    maxWidth: "86%",
+    maxWidth: "100%",
     borderRadius: 16,
     paddingHorizontal: 12,
     paddingVertical: 10,

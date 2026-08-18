@@ -155,6 +155,64 @@ function getAnswerChoices(res: any): string[] {
   return choices;
 }
 
+function renderAssistantBody(text: string, isTroubleshooting?: boolean) {
+  if (!isTroubleshooting) {
+    return <Text style={[styles.bubbleText, styles.aiText]}>{text}</Text>;
+  }
+
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const parts: { type: "step" | "text"; text: string; number?: number }[] = [];
+  let stepNumber = 0;
+
+  for (const line of lines) {
+    const cleaned = line
+      .replace(/^[-•*]\s*/, "")
+      .replace(/^\d+[.)]\s*/, "")
+      .trim();
+
+    if (!cleaned) continue;
+
+    const looksLikeStep =
+      /^[-•*]\s+/.test(line) ||
+      /^\d+[.)]\s+/.test(line) ||
+      /^(check|try|turn|reset|inspect|look|verify|test|shut|disconnect|connect|plug|unplug|open|close|press|hold|confirm|make sure|listen|remove|replace)\b/i.test(cleaned);
+
+    if (looksLikeStep) {
+      stepNumber += 1;
+      parts.push({ type: "step", text: cleaned, number: stepNumber });
+    } else {
+      parts.push({ type: "text", text: cleaned });
+    }
+  }
+
+  if (!parts.some((part) => part.type === "step")) {
+    return <Text style={[styles.bubbleText, styles.aiText]}>{text}</Text>;
+  }
+
+  return (
+    <View style={styles.stepsWrap}>
+      {parts.map((part, index) =>
+        part.type === "step" ? (
+          <View key={`${part.text}-${index}`} style={styles.stepRow}>
+            <View style={styles.stepNumberBadge}>
+              <Text style={styles.stepNumberText}>{part.number}</Text>
+            </View>
+            <Text style={styles.stepText}>{part.text}</Text>
+          </View>
+        ) : (
+          <Text key={`${part.text}-${index}`} style={styles.stepIntroText}>
+            {part.text}
+          </Text>
+        )
+      )}
+    </View>
+  );
+}
+
 export default function Chat() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -494,7 +552,7 @@ export default function Chat() {
       throw new Error("EMPTY_ASSISTANT_RESPONSE");
     }
 
-    const answerChoices = getAnswerChoices(response);
+    const rawAnswerChoices = getAnswerChoices(response);
 
     const checkpointSummary =
       (response?.checkpoint_summary || response?.data?.checkpoint_summary) as
@@ -507,6 +565,11 @@ export default function Chat() {
     // Prefer the explicit backend flag. Fallback to show_escalation for older backend responses.
     const isTroubleshootingTurn =
       typeof troubleshootingFlag === "boolean" ? troubleshootingFlag : se;
+
+    // Quick replies belong only to the intake / clarifying-question phase.
+    // Even if an older backend accidentally returns choices with a troubleshooting
+    // response, the app will refuse to display them.
+    const answerChoices = isTroubleshootingTurn ? [] : rawAnswerChoices;
 
     setItems((prev) => [
       ...prev,
@@ -716,24 +779,37 @@ export default function Chat() {
             const cq = item.meta?.clarifyingQuestion?.trim();
             const body = item.text;
 
+            const showQuickReplies =
+              !isUser &&
+              !item.meta?.troubleshootingTurn &&
+              !!item.meta?.answerChoices?.length;
+
             return (
-              <View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
-                {!isUser && (
-                  <View style={styles.avatar}>
-                    <Text style={styles.avatarText}>{initials("VB")}</Text>
-                  </View>
-                )}
+              <View>
+                <View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
+                  {!isUser && (
+                    <View style={styles.avatar}>
+                      <Text style={styles.avatarText}>{initials("VB")}</Text>
+                    </View>
+                  )}
 
-                <View style={styles.messageColumn}>
-                  <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
-                    {!isUser && !!cq && <Text style={styles.clarifyingQuestion}>{cq}</Text>}
-                    <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>{body}</Text>
-                    {!isUser && renderCheckpointSummary(item.meta?.checkpointSummary)}
+                  <View style={styles.messageColumn}>
+                    <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
+                      {!isUser && !!cq && <Text style={styles.clarifyingQuestion}>{cq}</Text>}
+                      {isUser ? (
+                        <Text style={[styles.bubbleText, styles.userText]}>{body}</Text>
+                      ) : (
+                        renderAssistantBody(body, item.meta?.troubleshootingTurn)
+                      )}
+                      {!isUser && renderCheckpointSummary(item.meta?.checkpointSummary)}
+                    </View>
                   </View>
+                </View>
 
-                  {!isUser && !!item.meta?.answerChoices?.length && (
+                {showQuickReplies && (
+                  <View style={styles.quickReplyUserRow}>
                     <View style={styles.quickReplyWrap}>
-                      {item.meta.answerChoices.map((choice) => (
+                      {item.meta!.answerChoices!.map((choice) => (
                         <Pressable
                           key={choice}
                           disabled={sending || !aiAllowed}
@@ -753,9 +829,13 @@ export default function Chat() {
                         </Pressable>
                       ))}
                     </View>
-                  )}
-                </View>
+                  </View>
+                )}
               </View>
+            );
+          }}
+          ItemSeparatorComponent={undefined}
+          ListHeaderComponent={null}
             );
           }}
           ListFooterComponent={
@@ -1004,14 +1084,22 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
 
+  quickReplyUserRow: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    marginTop: -2,
+    marginBottom: 10,
+    paddingLeft: 76,
+  },
   quickReplyWrap: {
     flexDirection: "row",
     flexWrap: "wrap",
+    justifyContent: "flex-end",
     gap: 8,
-    marginTop: 8,
+    maxWidth: "88%",
   },
   quickReplyBtn: {
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "rgba(4,53,83,0.10)",
     borderWidth: 1,
     borderColor: "rgba(4,53,83,0.22)",
     borderRadius: 18,
@@ -1062,6 +1150,44 @@ const styles = StyleSheet.create({
     fontSize: 16.25,
     lineHeight: 22,
     marginBottom: 6,
+  },
+
+  stepsWrap: {
+    gap: 10,
+  },
+  stepIntroText: {
+    color: BRAND.lightText,
+    fontSize: 16.5,
+    lineHeight: 23,
+    marginBottom: 2,
+  },
+  stepRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  stepNumberBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "rgba(4,53,83,0.10)",
+    borderWidth: 1,
+    borderColor: "rgba(4,53,83,0.16)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 1,
+  },
+  stepNumberText: {
+    color: BRAND.navy,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  stepText: {
+    flex: 1,
+    color: BRAND.lightText,
+    fontSize: 16.25,
+    lineHeight: 22.5,
+    fontWeight: "400",
   },
 
   typingBubble: { flexDirection: "row", alignItems: "center", gap: 10 },

@@ -3,7 +3,7 @@
     "name": "Vinnie’s Brain",
     "owner": "vinnies",
     "slug": "vinnies-brain-app",
-    "version": "1.0.19",
+    "version": "1.1.20",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "vinniesbrainapp",
@@ -12,14 +12,14 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.vinnies.vinniesbrain",
-      "buildNumber": "95",
+      "buildNumber": "97",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
       "package": "com.brizzalicious.vinniesbrainapp",
-      "versionCode": 25,
+      "versionCode": 27,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundColor": "#000000",

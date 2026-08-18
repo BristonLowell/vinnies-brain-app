@@ -11,7 +11,7 @@ import {
   ActivityIndicator,
   Alert,
   InteractionManager,
-  Keyboard,
+  StatusBar,
   ScrollView,
   Image,
 } from "react-native";
@@ -19,6 +19,19 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { adminDeleteLiveChatConversation, getSavedAdminKey } from "../src/api";
 import { API_BASE_URL } from "../src/config";
+
+const BRAND = {
+  bg: "#F6F7F9",
+  surface: "#FFFFFF",
+  border: "rgba(0,0,0,0.10)",
+  navy: "#043553",
+  navySoft: "rgba(4,53,83,0.10)",
+  text: "#101828",
+  muted: "rgba(16,24,40,0.70)",
+  faint: "rgba(16,24,40,0.48)",
+  headerBg: "#FFFFFF",
+  danger: "#B42318",
+};
 
 type Msg = {
   id?: string;
@@ -36,6 +49,8 @@ type AiMsg = {
 };
 
 type AiMeta = {
+  airstream_year?: number | null;
+  category?: string | null;
   active_article_id?: string | null;
   active_node_id?: string | null;
   active_node_text?: string | null;
@@ -83,7 +98,7 @@ export default function AdminChat() {
 
   // Live chat messages
   const [messages, setMessages] = useState<Msg[]>([]);
-  const [loading, setLoading] = useState<boolean>(false);
+  const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string>("");
 
   // AI history panel
@@ -96,16 +111,6 @@ export default function AdminChat() {
   const [aiError, setAiError] = useState<string>("");
 
   const listRef = useRef<FlatList<Msg>>(null);
-  const [keyboardOpen, setKeyboardOpen] = useState(false);
-
-  useEffect(() => {
-    const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardOpen(true));
-    const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardOpen(false));
-    return () => {
-      show.remove();
-      hide.remove();
-    };
-  }, []);
 
   const fetchAiHistory = useCallback(
     async (key: string) => {
@@ -148,6 +153,8 @@ export default function AdminChat() {
         setAiSummary(String(data?.troubleshooting_summary ?? "").trim());
 
         setAiMeta({
+          airstream_year: data?.airstream_year ?? null,
+          category: data?.category ?? null,
           active_article_id: data?.active_article_id ?? null,
           active_node_id: data?.active_node_id ?? null,
           active_node_text: data?.active_node_text ?? null,
@@ -188,16 +195,21 @@ export default function AdminChat() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const key = await getSavedAdminKey();
-      if (cancelled) return;
+      setLoading(true);
+      try {
+        const key = await getSavedAdminKey();
+        if (cancelled) return;
 
-      setAdminKey(key || "");
-      if (key) {
-        await refresh(key);
-        await fetchAiHistory(key);
-        InteractionManager.runAfterInteractions(() => {
-          requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: false }));
-        });
+        setAdminKey(key || "");
+        if (key) {
+          await refresh(key);
+          await fetchAiHistory(key);
+          InteractionManager.runAfterInteractions(() => {
+            requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: false }));
+          });
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     })();
     return () => {
@@ -278,6 +290,21 @@ export default function AdminChat() {
           )}
         </View>
       </View>
+
+      {(aiMeta.airstream_year || aiMeta.category) && (
+        <View style={styles.aiContextRow}>
+          {!!aiMeta.airstream_year && (
+            <View style={styles.aiContextChip}>
+              <Text style={styles.aiContextText}>{aiMeta.airstream_year} Airstream</Text>
+            </View>
+          )}
+          {!!aiMeta.category && (
+            <View style={styles.aiContextChip}>
+              <Text style={styles.aiContextText}>{aiMeta.category}</Text>
+            </View>
+          )}
+        </View>
+      )}
 
       {aiLoading ? (
         <Text style={styles.aiSub}>Loading summary…</Text>
@@ -388,6 +415,8 @@ export default function AdminChat() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
+      <StatusBar barStyle="dark-content" backgroundColor={BRAND.headerBg} />
+
       <View style={styles.header}>
         <Pressable
           onPress={() => router.back()}
@@ -401,7 +430,9 @@ export default function AdminChat() {
             {title}
           </Text>
           <Text style={styles.hSub} numberOfLines={1}>
-            {conversationId}
+            {customerId
+              ? `Session ${customerId.slice(0, 8)}…`
+              : `Conversation ${conversationId.slice(0, 8)}…`}
           </Text>
         </View>
 
@@ -409,7 +440,7 @@ export default function AdminChat() {
           onPress={confirmDeleteConversation}
           style={({ pressed }) => [styles.hBtnDanger, pressed && { opacity: 0.85 }]}
         >
-          <Text style={styles.hBtnText}>Delete</Text>
+          <Text style={[styles.hBtnText, styles.hBtnDangerText]}>Delete</Text>
         </Pressable>
       </View>
 
@@ -474,8 +505,8 @@ export default function AdminChat() {
             <TextInput
               value={draft}
               onChangeText={setDraft}
-              placeholder="Reply as owner…"
-              placeholderTextColor="rgba(255,255,255,0.45)"
+              placeholder="Reply to customer…"
+              placeholderTextColor={BRAND.muted}
               style={styles.input}
               multiline
               returnKeyType="send"
@@ -503,7 +534,7 @@ export default function AdminChat() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#071018" },
+  safe: { flex: 1, backgroundColor: BRAND.bg },
 
   header: {
     flexDirection: "row",
@@ -511,150 +542,168 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingHorizontal: 12,
     paddingTop: 8,
-    paddingBottom: 8,
+    paddingBottom: 9,
+    backgroundColor: BRAND.headerBg,
     borderBottomWidth: 1,
-    borderBottomColor: "rgba(255,255,255,0.10)",
+    borderBottomColor: BRAND.border,
   },
-  hTitleWrap: { flex: 1 },
-  hTitle: { color: "rgba(255,255,255,0.92)", fontWeight: "900", fontSize: 16 },
-  hSub: { color: "rgba(255,255,255,0.55)", fontWeight: "700", fontSize: 11, marginTop: 2 },
-
+  hTitleWrap: { flex: 1, alignItems: "center" },
+  hTitle: { color: BRAND.text, fontWeight: "700", fontSize: 16 },
+  hSub: { color: BRAND.muted, fontWeight: "500", fontSize: 11, marginTop: 2 },
   hBtn: {
+    minWidth: 58,
     paddingHorizontal: 10,
     paddingVertical: 8,
     borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: BRAND.surface,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
+    borderColor: BRAND.border,
+    alignItems: "center",
   },
   hBtnDanger: {
+    minWidth: 58,
     paddingHorizontal: 10,
     paddingVertical: 8,
     borderRadius: 12,
-    backgroundColor: "rgba(255,80,80,0.18)",
+    backgroundColor: "rgba(180,35,24,0.06)",
     borderWidth: 1,
-    borderColor: "rgba(255,80,80,0.25)",
+    borderColor: "rgba(180,35,24,0.16)",
+    alignItems: "center",
   },
-  hBtnText: { color: "rgba(255,255,255,0.92)", fontWeight: "900" },
+  hBtnText: { color: BRAND.navy, fontWeight: "600", fontSize: 13 },
+  hBtnDangerText: { color: BRAND.danger },
 
   aiWrap: {
     paddingHorizontal: 12,
     paddingTop: 10,
-    paddingBottom: 10,
+    paddingBottom: 11,
+    backgroundColor: BRAND.bg,
     borderBottomWidth: 1,
-    borderBottomColor: "rgba(255,255,255,0.10)",
+    borderBottomColor: BRAND.border,
   },
-  aiTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
-  aiTitle: { color: "rgba(255,255,255,0.92)", fontWeight: "900", fontSize: 14 },
+  aiTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  aiTitle: { color: BRAND.text, fontWeight: "700", fontSize: 14.5 },
   aiTopBtns: { flexDirection: "row", gap: 8 },
   aiBtn: {
     paddingHorizontal: 10,
     paddingVertical: 7,
     borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: BRAND.surface,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
+    borderColor: BRAND.border,
   },
-  aiBtnText: { color: "rgba(255,255,255,0.92)", fontWeight: "900", fontSize: 12 },
-
-  aiSub: { marginTop: 6, color: "rgba(255,255,255,0.55)", fontWeight: "700", fontSize: 12 },
-  aiErr: { marginTop: 6, color: "rgba(255,90,90,0.95)", fontWeight: "800", fontSize: 12 },
+  aiBtnText: { color: BRAND.navy, fontWeight: "600", fontSize: 12 },
+  aiContextRow: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginTop: 8 },
+  aiContextChip: {
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: BRAND.navySoft,
+    borderWidth: 1,
+    borderColor: "rgba(4,53,83,0.14)",
+  },
+  aiContextText: { color: BRAND.navy, fontWeight: "600", fontSize: 11.5 },
+  aiSub: { marginTop: 7, color: BRAND.muted, fontWeight: "400", fontSize: 12.5 },
+  aiErr: { marginTop: 7, color: BRAND.danger, fontWeight: "500", fontSize: 12.5 },
 
   aiSummaryCard: {
     marginTop: 10,
     borderRadius: 16,
-    backgroundColor: "rgba(241,238,219,0.08)",
+    backgroundColor: BRAND.surface,
     borderWidth: 1,
-    borderColor: "rgba(241,238,219,0.16)",
+    borderColor: BRAND.border,
     padding: 12,
   },
-  aiSummaryLabel: {
-    color: "rgba(241,238,219,0.95)",
-    fontWeight: "900",
-    fontSize: 12,
-    marginBottom: 6,
-  },
-  aiSummaryText: { color: "rgba(255,255,255,0.92)", fontSize: 13, lineHeight: 18 },
+  aiSummaryLabel: { color: BRAND.navy, fontWeight: "600", fontSize: 12, marginBottom: 6 },
+  aiSummaryText: { color: BRAND.text, fontSize: 13.5, lineHeight: 19, fontWeight: "400" },
 
   aiTranscriptCard: {
     marginTop: 10,
     borderRadius: 16,
-    backgroundColor: "rgba(255,255,255,0.05)",
+    backgroundColor: BRAND.surface,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
+    borderColor: BRAND.border,
     overflow: "hidden",
   },
   aiScroll: { paddingHorizontal: 10, paddingTop: 10 },
   aiHint: {
     marginTop: 10,
     marginBottom: 2,
-    color: "rgba(255,255,255,0.50)",
-    fontWeight: "700",
+    color: BRAND.muted,
+    fontWeight: "500",
     fontSize: 12,
     textAlign: "center",
   },
-
   aiMsgRow: {
     padding: 10,
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.04)",
+    backgroundColor: BRAND.bg,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
+    borderColor: BRAND.border,
     marginBottom: 10,
   },
   aiMsgHeader: { flexDirection: "row", justifyContent: "space-between", gap: 10, marginBottom: 6 },
-  aiRole: { color: "rgba(241,238,219,0.95)", fontWeight: "900", fontSize: 12 },
-  aiTime: { color: "rgba(255,255,255,0.45)", fontWeight: "700", fontSize: 11 },
-  aiText: { color: "rgba(255,255,255,0.92)", fontSize: 13, lineHeight: 18 },
+  aiRole: { color: BRAND.navy, fontWeight: "600", fontSize: 12 },
+  aiTime: { color: BRAND.faint, fontWeight: "400", fontSize: 11 },
+  aiText: { color: BRAND.text, fontSize: 13.5, lineHeight: 19, fontWeight: "400" },
 
   list: { paddingHorizontal: 12, paddingTop: 12, gap: 10, flexGrow: 1 },
   msgRow: { flexDirection: "row" },
   left: { justifyContent: "flex-start" },
   right: { justifyContent: "flex-end" },
-
-  bubble: { maxWidth: "86%", paddingVertical: 10, paddingHorizontal: 12, borderRadius: 16, borderWidth: 1 },
-  bCust: { backgroundColor: "rgba(255,255,255,0.05)", borderColor: "rgba(255,255,255,0.10)" },
-  bOwner: { backgroundColor: "rgba(4,53,83,0.28)", borderColor: "rgba(241,238,219,0.18)" },
-  bSys: { backgroundColor: "rgba(255,255,255,0.06)", borderColor: "rgba(255,255,255,0.12)" },
-
+  bubble: {
+    maxWidth: "86%",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  bCust: { backgroundColor: BRAND.surface, borderColor: BRAND.border },
+  bOwner: { backgroundColor: BRAND.navySoft, borderColor: "rgba(4,53,83,0.18)" },
+  bSys: { backgroundColor: "rgba(4,53,83,0.06)", borderColor: "rgba(4,53,83,0.14)" },
   msgHead: { flexDirection: "row", justifyContent: "space-between", gap: 10, marginBottom: 6 },
-  msgLabel: { color: "rgba(241,238,219,0.92)", fontWeight: "900", fontSize: 12 },
-  msgTime: { color: "rgba(255,255,255,0.45)", fontWeight: "700", fontSize: 11 },
-  msgText: { color: "rgba(255,255,255,0.92)", fontSize: 14, lineHeight: 19 },
-
+  msgLabel: { color: BRAND.navy, fontWeight: "600", fontSize: 12 },
+  msgTime: { color: BRAND.faint, fontWeight: "400", fontSize: 11 },
+  msgText: { color: BRAND.text, fontSize: 14.5, lineHeight: 20, fontWeight: "400" },
   msgImage: {
     width: 220,
     height: 220,
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: "rgba(0,0,0,0.04)",
   },
 
   inputBar: {
     paddingHorizontal: 12,
     paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: "rgba(255,255,255,0.10)",
-    backgroundColor: "#071018",
+    borderTopColor: BRAND.border,
+    backgroundColor: BRAND.bg,
   },
   inputCard: {
     flexDirection: "row",
     gap: 10,
     padding: 10,
     borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: BRAND.surface,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
+    borderColor: BRAND.border,
     alignItems: "flex-end",
   },
   input: {
     flex: 1,
-    color: "white",
+    color: BRAND.text,
     minHeight: 44,
     maxHeight: 130,
     fontSize: 15,
     lineHeight: 20,
     paddingTop: 10,
     paddingBottom: 10,
+    fontWeight: "400",
   },
   sendBtn: {
     height: 44,
@@ -662,23 +711,23 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#F1EEDB",
+    backgroundColor: BRAND.navy,
   },
-  sendBtnDisabled: { backgroundColor: "rgba(241,238,219,0.35)" },
-  sendText: { color: "#043553", fontWeight: "900" },
+  sendBtnDisabled: { opacity: 0.42 },
+  sendText: { color: "#FFFFFF", fontWeight: "600" },
 
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 18, gap: 10 },
-  title: { color: "rgba(255,255,255,0.92)", fontWeight: "900", fontSize: 16 },
-  sub: { color: "rgba(255,255,255,0.60)", fontWeight: "700", textAlign: "center" },
-  err: { color: "rgba(255,90,90,0.95)", fontWeight: "800", textAlign: "center" },
+  title: { color: BRAND.text, fontWeight: "700", fontSize: 16 },
+  sub: { color: BRAND.muted, fontWeight: "400", textAlign: "center" },
+  err: { color: BRAND.danger, fontWeight: "500", textAlign: "center" },
   backBtn: {
     marginTop: 8,
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: BRAND.surface,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
+    borderColor: BRAND.border,
   },
-  backText: { color: "rgba(255,255,255,0.92)", fontWeight: "900" },
+  backText: { color: BRAND.navy, fontWeight: "600" },
 });

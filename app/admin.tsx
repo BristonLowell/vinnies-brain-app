@@ -162,6 +162,17 @@ function validateDecisionTree(nodes: DTNode[], startId: string): string | null {
   return null;
 }
 
+type KbFact = {
+  id: string;
+  fact_text: string;
+  category?: string | null;
+  years_min?: number | null;
+  years_max?: number | null;
+  keywords?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
 type SelectOption = { value: string; label: string; sub?: string };
 
 function SelectModal(props: {
@@ -288,12 +299,36 @@ export default function Admin() {
   const [adminKey, setAdminKey] = useState("");
   const [adminKeyReady, setAdminKeyReady] = useState(false);
 
+  // ===== Quick Add =====
+  const [quickMode, setQuickMode] = useState<"fact" | "article">("fact");
+  const [showAdvancedBuilder, setShowAdvancedBuilder] = useState(false);
+
+  // Quick facts
+  const [factText, setFactText] = useState("");
+  const [factCategory, setFactCategory] = useState("General");
+  const [factYearsMin, setFactYearsMin] = useState("2010");
+  const [factYearsMax, setFactYearsMax] = useState("2026");
+  const [factKeywords, setFactKeywords] = useState("");
+  const [facts, setFacts] = useState<KbFact[]>([]);
+  const [factsLoading, setFactsLoading] = useState(false);
+  const [savingFact, setSavingFact] = useState(false);
+  const [editingFactId, setEditingFactId] = useState("");
+
+  // Quick articles
+  const [quickArticleTitle, setQuickArticleTitle] = useState("");
+  const [quickArticleCategory, setQuickArticleCategory] = useState("General");
+  const [quickArticleYearsMin, setQuickArticleYearsMin] = useState("2010");
+  const [quickArticleYearsMax, setQuickArticleYearsMax] = useState("2026");
+  const [quickArticleContent, setQuickArticleContent] = useState("");
+  const [quickArticleQuestion, setQuickArticleQuestion] = useState("");
+  const [savingQuickArticle, setSavingQuickArticle] = useState(false);
+
   // ===== Simple fields =====
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState("Water/Leaks");
   const [severity, setSeverity] = useState("Medium");
   const [yearsMin, setYearsMin] = useState("2010");
-  const [yearsMax, setYearsMax] = useState("2025");
+  const [yearsMax, setYearsMax] = useState("2026");
   const [customerSummary, setCustomerSummary] = useState("");
 
   // ===== Optional JSON fields (kept, but tucked under Advanced) =====
@@ -342,6 +377,203 @@ export default function Admin() {
     })();
   }, []);
 
+
+  async function loadFacts(keyOverride?: string) {
+    const key = (keyOverride || adminKey || "").trim();
+    if (!key) return;
+
+    try {
+      setFactsLoading(true);
+      const r = await fetch(`${API_BASE_URL}/v1/admin/facts`, {
+        headers: { "X-Admin-Key": key },
+      });
+      const raw = await r.text();
+      if (!r.ok) throw new Error(raw || `Request failed (${r.status})`);
+      const data = raw ? JSON.parse(raw) : {};
+      setFacts(Array.isArray(data?.facts) ? data.facts : []);
+    } catch (e: any) {
+      Alert.alert("Couldn’t load facts", String(e?.message ?? e));
+    } finally {
+      setFactsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!adminKeyReady || !adminKey.trim()) return;
+    loadFacts(adminKey).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adminKeyReady, adminKey]);
+
+  function clearFactForm() {
+    setFactText("");
+    setFactCategory("General");
+    setFactYearsMin("2010");
+    setFactYearsMax("2026");
+    setFactKeywords("");
+    setEditingFactId("");
+  }
+
+  async function saveFact() {
+    const fact = factText.trim();
+    const ymin = Number(factYearsMin);
+    const ymax = Number(factYearsMax);
+
+    if (!fact) {
+      Alert.alert("Add a fact", "Type the fact you want Vinnie to know.");
+      return;
+    }
+    if (!Number.isFinite(ymin) || !Number.isFinite(ymax) || ymin > ymax) {
+      Alert.alert("Check years", "Enter a valid minimum and maximum year.");
+      return;
+    }
+
+    try {
+      setSavingFact(true);
+      const editing = !!editingFactId;
+      const url = editing
+        ? `${API_BASE_URL}/v1/admin/facts/${editingFactId}`
+        : `${API_BASE_URL}/v1/admin/facts`;
+
+      const r = await fetch(url, {
+        method: editing ? "PUT" : "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Admin-Key": adminKey.trim(),
+        },
+        body: JSON.stringify({
+          fact_text: fact,
+          category: factCategory.trim() || "General",
+          years_min: ymin,
+          years_max: ymax,
+          keywords: factKeywords.trim(),
+        }),
+      });
+
+      const raw = await r.text();
+      if (!r.ok) throw new Error(raw || `Request failed (${r.status})`);
+
+      clearFactForm();
+      await loadFacts();
+      Alert.alert(editing ? "Fact updated" : "Fact saved", "Vinnie can use this fact immediately.");
+    } catch (e: any) {
+      Alert.alert("Couldn’t save fact", String(e?.message ?? e));
+    } finally {
+      setSavingFact(false);
+    }
+  }
+
+  function editFact(item: KbFact) {
+    setQuickMode("fact");
+    setFactText(item.fact_text || "");
+    setFactCategory(item.category || "General");
+    setFactYearsMin(String(item.years_min ?? 2010));
+    setFactYearsMax(String(item.years_max ?? 2026));
+    setFactKeywords(item.keywords || "");
+    setEditingFactId(item.id);
+  }
+
+  function deleteFact(item: KbFact) {
+    Alert.alert("Delete fact?", item.fact_text, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            const r = await fetch(`${API_BASE_URL}/v1/admin/facts/${item.id}`, {
+              method: "DELETE",
+              headers: { "X-Admin-Key": adminKey.trim() },
+            });
+            const raw = await r.text();
+            if (!r.ok) throw new Error(raw || `Request failed (${r.status})`);
+            if (editingFactId === item.id) clearFactForm();
+            await loadFacts();
+          } catch (e: any) {
+            Alert.alert("Couldn’t delete fact", String(e?.message ?? e));
+          }
+        },
+      },
+    ]);
+  }
+
+  function quickArticleAutoTitle() {
+    if (quickArticleTitle.trim()) return quickArticleTitle.trim();
+    const firstLine = quickArticleContent
+      .trim()
+      .split(/\n+/)[0]
+      .replace(/^[-•*\s]+/, "")
+      .trim();
+    if (!firstLine) return "Airstream troubleshooting note";
+    return firstLine.length > 72 ? `${firstLine.slice(0, 69).trim()}…` : firstLine;
+  }
+
+  async function saveQuickArticle() {
+    const body = quickArticleContent.trim();
+    const ymin = Number(quickArticleYearsMin);
+    const ymax = Number(quickArticleYearsMax);
+
+    if (!body) {
+      Alert.alert("Add article information", "Paste or type what you want Vinnie to know or do.");
+      return;
+    }
+    if (!Number.isFinite(ymin) || !Number.isFinite(ymax) || ymin > ymax) {
+      Alert.alert("Check years", "Enter a valid minimum and maximum year.");
+      return;
+    }
+
+    const articleTitle = quickArticleAutoTitle();
+    const firstQuestion = quickArticleQuestion.trim();
+    const categoryValue = quickArticleCategory.trim() || "General";
+
+    try {
+      setSavingQuickArticle(true);
+      const retrievalText = [
+        `Title: ${articleTitle}`,
+        `Category: ${categoryValue}`,
+        `Years: ${ymin}-${ymax}`,
+        body,
+        firstQuestion ? `Useful clarifying question: ${firstQuestion}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      const r = await fetch(`${API_BASE_URL}/v1/admin/articles`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Admin-Key": adminKey.trim(),
+        },
+        body: JSON.stringify({
+          title: articleTitle,
+          category: categoryValue,
+          severity: "Medium",
+          years_min: ymin,
+          years_max: ymax,
+          customer_summary: body,
+          clarifying_questions: firstQuestion ? [firstQuestion] : [],
+          steps: [],
+          model_year_notes: null,
+          stop_and_escalate: null,
+          next_step: null,
+          retrieval_text: retrievalText,
+          decision_tree: null,
+        }),
+      });
+
+      const raw = await r.text();
+      if (!r.ok) throw new Error(raw || `Request failed (${r.status})`);
+
+      setQuickArticleTitle("");
+      setQuickArticleContent("");
+      setQuickArticleQuestion("");
+      Alert.alert("Article saved", "The article was added to Vinnie’s knowledge base.");
+    } catch (e: any) {
+      Alert.alert("Couldn’t save article", String(e?.message ?? e));
+    } finally {
+      setSavingQuickArticle(false);
+    }
+  }
+
   // ✅ Register this admin device for push notifications (Option A)
   useEffect(() => {
     if (!adminKeyReady) return;
@@ -383,7 +615,7 @@ export default function Admin() {
         setCategory(obj.category || "Water/Leaks");
         setSeverity(obj.severity || "Medium");
         setYearsMin(String(obj.yearsMin ?? "2010"));
-        setYearsMax(String(obj.yearsMax ?? "2025"));
+        setYearsMax(String(obj.yearsMax ?? "2026"));
         setCustomerSummary(obj.customerSummary || "");
 
         setModelYearNotesJson(obj.modelYearNotesJson || "");
@@ -660,7 +892,7 @@ export default function Admin() {
       setCategory("Water/Leaks");
       setSeverity("Medium");
       setYearsMin("2010");
-      setYearsMax("2025");
+      setYearsMax("2026");
       setCustomerSummary("");
       setModelYearNotesJson("");
       setStopAndEscalateJson("");
@@ -753,6 +985,265 @@ export default function Admin() {
             </View>
           </View>
 
+          {/* Quick Add */}
+          <View style={styles.quickAddCard}>
+            <Text style={styles.quickAddTitle}>Quick Add</Text>
+            <Text style={styles.sub}>
+              Add an authoritative fact in seconds, or paste a simple article without building a tree.
+            </Text>
+
+            <View style={styles.segmented}>
+              <Pressable
+                onPress={() => setQuickMode("fact")}
+                style={[styles.segmentBtn, quickMode === "fact" && styles.segmentBtnActive]}
+              >
+                <Text style={[styles.segmentText, quickMode === "fact" && styles.segmentTextActive]}>
+                  AI Fact
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setQuickMode("article")}
+                style={[styles.segmentBtn, quickMode === "article" && styles.segmentBtnActive]}
+              >
+                <Text style={[styles.segmentText, quickMode === "article" && styles.segmentTextActive]}>
+                  Quick Article
+                </Text>
+              </Pressable>
+            </View>
+
+            {quickMode === "fact" ? (
+              <>
+                <Text style={styles.label}>Fact</Text>
+                <TextInput
+                  value={factText}
+                  onChangeText={setFactText}
+                  placeholder='e.g., Aluminum wheels torque to 110 ft-lb.'
+                  placeholderTextColor="rgba(16,24,40,0.45)"
+                  style={[styles.input, styles.quickFactInput]}
+                  multiline
+                />
+
+                <View style={styles.grid2}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.label}>Category</Text>
+                    <TextInput
+                      value={factCategory}
+                      onChangeText={setFactCategory}
+                      placeholder="Wheels / Tires"
+                      placeholderTextColor="rgba(16,24,40,0.45)"
+                      style={styles.input}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.label}>Keywords</Text>
+                    <TextInput
+                      value={factKeywords}
+                      onChangeText={setFactKeywords}
+                      placeholder="wheel, torque, lug"
+                      placeholderTextColor="rgba(16,24,40,0.45)"
+                      style={styles.input}
+                    />
+                  </View>
+                </View>
+
+                <View style={styles.grid2}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.label}>Years Min</Text>
+                    <TextInput
+                      value={factYearsMin}
+                      onChangeText={setFactYearsMin}
+                      keyboardType="number-pad"
+                      placeholder="2010"
+                      placeholderTextColor="rgba(16,24,40,0.45)"
+                      style={styles.input}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.label}>Years Max</Text>
+                    <TextInput
+                      value={factYearsMax}
+                      onChangeText={setFactYearsMax}
+                      keyboardType="number-pad"
+                      placeholder="2026"
+                      placeholderTextColor="rgba(16,24,40,0.45)"
+                      style={styles.input}
+                    />
+                  </View>
+                </View>
+
+                <View style={styles.quickActions}>
+                  <Pressable
+                    style={[styles.quickSaveBtn, savingFact && styles.btnDisabled]}
+                    onPress={() => {
+                      Keyboard.dismiss();
+                      saveFact();
+                    }}
+                    disabled={savingFact}
+                  >
+                    <Text style={styles.quickSaveBtnText}>
+                      {savingFact ? "Saving…" : editingFactId ? "Update Fact" : "Save Fact"}
+                    </Text>
+                  </Pressable>
+
+                  {!!editingFactId && (
+                    <Pressable style={styles.quickCancelBtn} onPress={clearFactForm}>
+                      <Text style={styles.quickCancelBtnText}>Cancel</Text>
+                    </Pressable>
+                  )}
+                </View>
+
+                <View style={styles.savedFactsHeader}>
+                  <Text style={styles.savedFactsTitle}>Saved facts</Text>
+                  <Pressable onPress={() => loadFacts()} hitSlop={8}>
+                    <Text style={styles.inlineLink}>{factsLoading ? "Loading…" : "Refresh"}</Text>
+                  </Pressable>
+                </View>
+
+                {facts.length === 0 ? (
+                  <Text style={styles.emptyQuickText}>
+                    {factsLoading ? "Loading facts…" : "No saved facts yet."}
+                  </Text>
+                ) : (
+                  <View style={styles.factList}>
+                    {facts.slice(0, 12).map((item) => (
+                      <View key={item.id} style={styles.factRow}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.factText}>{item.fact_text}</Text>
+                          <Text style={styles.factMeta}>
+                            {(item.category || "General") +
+                              " • " +
+                              `${item.years_min ?? "Any"}–${item.years_max ?? "Any"}`}
+                          </Text>
+                          {!!item.keywords && (
+                            <Text style={styles.factKeywords}>Keywords: {item.keywords}</Text>
+                          )}
+                        </View>
+
+                        <View style={styles.factRowActions}>
+                          <Pressable style={styles.miniActionBtn} onPress={() => editFact(item)}>
+                            <Text style={styles.miniActionText}>Edit</Text>
+                          </Pressable>
+                          <Pressable
+                            style={[styles.miniActionBtn, styles.miniDeleteBtn]}
+                            onPress={() => deleteFact(item)}
+                          >
+                            <Text style={styles.miniDeleteText}>Delete</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </>
+            ) : (
+              <>
+                <Text style={styles.label}>What should Vinnie know or do?</Text>
+                <TextInput
+                  value={quickArticleContent}
+                  onChangeText={setQuickArticleContent}
+                  placeholder="Paste the procedure, troubleshooting notes, model-specific information, or answer here…"
+                  placeholderTextColor="rgba(16,24,40,0.45)"
+                  style={[styles.input, styles.quickArticleInput]}
+                  multiline
+                  textAlignVertical="top"
+                />
+
+                <Text style={styles.label}>Title (optional)</Text>
+                <TextInput
+                  value={quickArticleTitle}
+                  onChangeText={setQuickArticleTitle}
+                  placeholder="Leave blank to use the first line"
+                  placeholderTextColor="rgba(16,24,40,0.45)"
+                  style={styles.input}
+                />
+
+                <View style={styles.grid2}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.label}>Category</Text>
+                    <TextInput
+                      value={quickArticleCategory}
+                      onChangeText={setQuickArticleCategory}
+                      placeholder="Water / Leaks"
+                      placeholderTextColor="rgba(16,24,40,0.45)"
+                      style={styles.input}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.label}>First question (optional)</Text>
+                    <TextInput
+                      value={quickArticleQuestion}
+                      onChangeText={setQuickArticleQuestion}
+                      placeholder="One useful clarifying question"
+                      placeholderTextColor="rgba(16,24,40,0.45)"
+                      style={styles.input}
+                    />
+                  </View>
+                </View>
+
+                <View style={styles.grid2}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.label}>Years Min</Text>
+                    <TextInput
+                      value={quickArticleYearsMin}
+                      onChangeText={setQuickArticleYearsMin}
+                      keyboardType="number-pad"
+                      placeholder="2010"
+                      placeholderTextColor="rgba(16,24,40,0.45)"
+                      style={styles.input}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.label}>Years Max</Text>
+                    <TextInput
+                      value={quickArticleYearsMax}
+                      onChangeText={setQuickArticleYearsMax}
+                      keyboardType="number-pad"
+                      placeholder="2026"
+                      placeholderTextColor="rgba(16,24,40,0.45)"
+                      style={styles.input}
+                    />
+                  </View>
+                </View>
+
+                <Pressable
+                  style={[styles.quickSaveBtn, savingQuickArticle && styles.btnDisabled]}
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    saveQuickArticle();
+                  }}
+                  disabled={savingQuickArticle}
+                >
+                  <Text style={styles.quickSaveBtnText}>
+                    {savingQuickArticle ? "Saving…" : "Save Article"}
+                  </Text>
+                </Pressable>
+
+                <Text style={styles.quickHint}>
+                  No decision tree required. Use the advanced builder only when the issue really needs branching.
+                </Text>
+              </>
+            )}
+          </View>
+
+          <Pressable
+            onPress={() => setShowAdvancedBuilder((v) => !v)}
+            style={({ pressed }) => [
+              styles.advancedToggle,
+              showAdvancedBuilder && styles.advancedToggleOpen,
+              pressed && { opacity: 0.9 },
+            ]}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={styles.advancedToggleTitle}>Advanced Article Builder</Text>
+              <Text style={styles.advancedToggleSub}>
+                Decision trees, branching, model-year JSON, and escalation rules
+              </Text>
+            </View>
+            <Text style={styles.advancedToggleChevron}>{showAdvancedBuilder ? "▲" : "▼"}</Text>
+          </Pressable>
+
+          {showAdvancedBuilder ? (
+            <>
           {/* Basics */}
           <View style={styles.card}>
             <View style={styles.cardTopRow}>
@@ -769,7 +1260,7 @@ export default function Admin() {
               value={title}
               onChangeText={setTitle}
               placeholder="e.g., Water pump runs but no water"
-              placeholderTextColor="rgba(255,255,255,0.45)"
+              placeholderTextColor="rgba(16,24,40,0.45)"
               style={styles.input}
             />
 
@@ -780,7 +1271,7 @@ export default function Admin() {
                   value={category}
                   onChangeText={setCategory}
                   placeholder="Water/Leaks"
-                  placeholderTextColor="rgba(255,255,255,0.45)"
+                  placeholderTextColor="rgba(16,24,40,0.45)"
                   style={styles.input}
                 />
               </View>
@@ -790,7 +1281,7 @@ export default function Admin() {
                   value={severity}
                   onChangeText={setSeverity}
                   placeholder="Low / Medium / High"
-                  placeholderTextColor="rgba(255,255,255,0.45)"
+                  placeholderTextColor="rgba(16,24,40,0.45)"
                   style={styles.input}
                 />
               </View>
@@ -804,7 +1295,7 @@ export default function Admin() {
                   onChangeText={setYearsMin}
                   keyboardType="number-pad"
                   placeholder="2010"
-                  placeholderTextColor="rgba(255,255,255,0.45)"
+                  placeholderTextColor="rgba(16,24,40,0.45)"
                   style={styles.input}
                 />
               </View>
@@ -814,8 +1305,8 @@ export default function Admin() {
                   value={yearsMax}
                   onChangeText={setYearsMax}
                   keyboardType="number-pad"
-                  placeholder="2025"
-                  placeholderTextColor="rgba(255,255,255,0.45)"
+                  placeholder="2026"
+                  placeholderTextColor="rgba(16,24,40,0.45)"
                   style={styles.input}
                 />
               </View>
@@ -826,7 +1317,7 @@ export default function Admin() {
               value={customerSummary}
               onChangeText={setCustomerSummary}
               placeholder="Short, clear explanation + quick checks. Keep it customer-friendly."
-              placeholderTextColor="rgba(255,255,255,0.45)"
+              placeholderTextColor="rgba(16,24,40,0.45)"
               style={[styles.input, { minHeight: 92 }]}
               multiline
             />
@@ -951,7 +1442,7 @@ export default function Admin() {
                     value={selectedNode.title}
                     onChangeText={(v) => updateNode(selectedIndex, { title: v })}
                     placeholder="e.g., When you turn on the pump, do you hear it running?"
-                    placeholderTextColor="rgba(255,255,255,0.45)"
+                    placeholderTextColor="rgba(16,24,40,0.45)"
                     style={styles.input}
                     multiline
                   />
@@ -961,7 +1452,7 @@ export default function Admin() {
                     value={selectedNode.body}
                     onChangeText={(v) => updateNode(selectedIndex, { body: v })}
                     placeholder="Optional extra context: where to look, what to listen for, safety note…"
-                    placeholderTextColor="rgba(255,255,255,0.45)"
+                    placeholderTextColor="rgba(16,24,40,0.45)"
                     style={[styles.input, { minHeight: 84 }]}
                     multiline
                   />
@@ -1033,7 +1524,7 @@ export default function Admin() {
                   value={modelYearNotesJson}
                   onChangeText={setModelYearNotesJson}
                   placeholder='Optional JSON. Example: [{"years":[2018,2019],"note":"..."}]'
-                  placeholderTextColor="rgba(255,255,255,0.45)"
+                  placeholderTextColor="rgba(16,24,40,0.45)"
                   style={[styles.input, { minHeight: 92, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" }]}
                   multiline
                 />
@@ -1056,7 +1547,7 @@ export default function Admin() {
                   value={stopAndEscalateJson}
                   onChangeText={setStopAndEscalateJson}
                   placeholder='Optional JSON. Example: [{"if":"smell gas","action":"end_escalate","note":"..."}]'
-                  placeholderTextColor="rgba(255,255,255,0.45)"
+                  placeholderTextColor="rgba(16,24,40,0.45)"
                   style={[styles.input, { minHeight: 92, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" }]}
                   multiline
                 />
@@ -1106,7 +1597,7 @@ export default function Admin() {
                       setCategory("Water/Leaks");
                       setSeverity("Medium");
                       setYearsMin("2010");
-                      setYearsMax("2025");
+                      setYearsMax("2026");
                       setCustomerSummary("");
                       setModelYearNotesJson("");
                       setStopAndEscalateJson("");
@@ -1128,6 +1619,9 @@ export default function Admin() {
             </Pressable>
           </View>
 
+            </>
+          ) : null}
+
           <View style={{ height: 16 }} />
         </ScrollView>
       </KeyboardAvoidingView>
@@ -1136,36 +1630,46 @@ export default function Admin() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#071018" },
+  safe: { flex: 1, backgroundColor: "#F6F7F9" },
   page: { padding: 14, paddingBottom: 24, gap: 12 },
 
   header: { padding: 14, gap: 10 },
   headerRow: { flexDirection: "row", alignItems: "flex-start", gap: 12 },
 
-  h1: { color: "white", fontSize: 22, fontWeight: "900" },
-  sub: { color: "rgba(255,255,255,0.70)", fontWeight: "700", marginTop: 4 },
+  h1: { color: "#101828", fontSize: 22, fontWeight: "700" },
+  sub: { color: "rgba(16,24,40,0.68)", fontWeight: "400", marginTop: 4, lineHeight: 19 },
 
   card: {
     borderRadius: 18,
     padding: 14,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
+    borderColor: "rgba(0,0,0,0.10)",
     gap: 10,
   },
-  cardTopRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 10 },
-  cardTitle: { color: "rgba(241,238,219,0.95)", fontSize: 16, fontWeight: "900" },
+  cardTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 10,
+  },
+  cardTitle: { color: "#101828", fontSize: 16, fontWeight: "600" },
 
-  label: { color: "rgba(255,255,255,0.78)", fontWeight: "900", fontSize: 12, marginTop: 4 },
+  label: {
+    color: "rgba(16,24,40,0.78)",
+    fontWeight: "600",
+    fontSize: 12,
+    marginTop: 4,
+  },
   input: {
     borderRadius: 14,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    color: "white",
-    backgroundColor: "rgba(255,255,255,0.06)",
+    color: "#101828",
+    backgroundColor: "#F9FAFB",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-    fontWeight: "800",
+    borderColor: "rgba(0,0,0,0.10)",
+    fontWeight: "400",
   },
 
   grid2: { flexDirection: "row", gap: 10 },
@@ -1175,57 +1679,66 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-    backgroundColor: "rgba(255,255,255,0.08)",
+    borderColor: "rgba(0,0,0,0.10)",
+    backgroundColor: "rgba(4,53,83,0.05)",
   },
-  pillText: { color: "rgba(255,255,255,0.85)", fontWeight: "900", fontSize: 12 },
+  pillText: { color: "rgba(16,24,40,0.78)", fontWeight: "500", fontSize: 12 },
 
   warnBox: {
     padding: 10,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "rgba(245,158,11,0.35)",
-    backgroundColor: "rgba(245,158,11,0.14)",
+    borderColor: "rgba(180,83,9,0.25)",
+    backgroundColor: "rgba(245,158,11,0.08)",
   },
-  warnText: { color: "white", fontWeight: "900" },
+  warnText: { color: "#92400E", fontWeight: "500" },
 
   smallBtn: {
     height: 34,
     paddingHorizontal: 12,
     borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,0.10)",
+    backgroundColor: "rgba(4,53,83,0.06)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    borderColor: "rgba(0,0,0,0.10)",
     alignItems: "center",
     justifyContent: "center",
   },
-  smallBtnOn: { backgroundColor: "rgba(241,238,219,0.14)", borderColor: "rgba(241,238,219,0.22)" },
-  smallDanger: { backgroundColor: "rgba(239,68,68,0.14)", borderColor: "rgba(239,68,68,0.22)" },
-  smallBtnText: { color: "white", fontWeight: "900", fontSize: 12 },
+  smallBtnOn: {
+    backgroundColor: "rgba(4,53,83,0.12)",
+    borderColor: "rgba(4,53,83,0.20)",
+  },
+  smallDanger: {
+    backgroundColor: "rgba(185,28,28,0.06)",
+    borderColor: "rgba(185,28,28,0.16)",
+  },
+  smallBtnText: { color: "#043553", fontWeight: "600", fontSize: 12 },
 
   mapWrap: {
     borderRadius: 16,
     padding: 12,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-    backgroundColor: "rgba(0,0,0,0.20)",
+    borderColor: "rgba(0,0,0,0.10)",
+    backgroundColor: "#F9FAFB",
     gap: 8,
   },
-  mapTitle: { color: "white", fontWeight: "900" },
+  mapTitle: { color: "#101828", fontWeight: "600" },
   mapRow: { flexDirection: "row", gap: 10, paddingVertical: 6 },
   mapNode: {
     width: 190,
     borderRadius: 14,
     padding: 10,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-    backgroundColor: "rgba(255,255,255,0.06)",
+    borderColor: "rgba(0,0,0,0.10)",
+    backgroundColor: "#FFFFFF",
     gap: 6,
   },
-  mapNodeSelected: { borderColor: "rgba(241,238,219,0.35)", backgroundColor: "rgba(241,238,219,0.10)" },
-  mapStart: { borderColor: "rgba(59,130,246,0.35)" },
-  mapNodeTitle: { color: "rgba(255,255,255,0.85)", fontWeight: "900", fontSize: 12 },
-  mapNodeText: { color: "white", fontWeight: "800", lineHeight: 18 },
+  mapNodeSelected: {
+    borderColor: "rgba(4,53,83,0.28)",
+    backgroundColor: "rgba(4,53,83,0.07)",
+  },
+  mapStart: { borderColor: "rgba(37,99,235,0.26)" },
+  mapNodeTitle: { color: "rgba(16,24,40,0.72)", fontWeight: "600", fontSize: 12 },
+  mapNodeText: { color: "#101828", fontWeight: "500", lineHeight: 18 },
 
   mapBranches: { flexDirection: "row", gap: 8, marginTop: 2 },
   branchChip: {
@@ -1236,25 +1749,30 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-    backgroundColor: "rgba(255,255,255,0.08)",
+    borderColor: "rgba(0,0,0,0.10)",
+    backgroundColor: "rgba(4,53,83,0.05)",
   },
-  branchChipLabel: { color: "rgba(241,238,219,0.95)", fontWeight: "900", fontSize: 12 },
-  branchChipText: { color: "white", fontWeight: "900", fontSize: 12 },
+  branchChipLabel: { color: "#043553", fontWeight: "600", fontSize: 12 },
+  branchChipText: { color: "#101828", fontWeight: "500", fontSize: 12 },
 
-  mapHint: { color: "rgba(255,255,255,0.60)", fontWeight: "700", fontSize: 12 },
+  mapHint: { color: "rgba(16,24,40,0.58)", fontWeight: "400", fontSize: 12 },
 
   nodeEditor: {
     marginTop: 8,
     borderRadius: 16,
     padding: 12,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-    backgroundColor: "rgba(255,255,255,0.05)",
+    borderColor: "rgba(0,0,0,0.10)",
+    backgroundColor: "#F9FAFB",
     gap: 10,
   },
-  nodeHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 10 },
-  nodeHeaderTitle: { color: "white", fontWeight: "900", fontSize: 15 },
+  nodeHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 10,
+  },
+  nodeHeaderTitle: { color: "#101828", fontWeight: "600", fontSize: 15 },
 
   branchesRow: { flexDirection: "row", gap: 10 },
   branchBox: {
@@ -1262,20 +1780,20 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: 10,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-    backgroundColor: "rgba(255,255,255,0.06)",
+    borderColor: "rgba(0,0,0,0.10)",
+    backgroundColor: "#FFFFFF",
     gap: 8,
   },
-  branchTitle: { color: "rgba(255,255,255,0.75)", fontWeight: "900" },
+  branchTitle: { color: "rgba(16,24,40,0.72)", fontWeight: "600" },
   branchPick: {
     borderRadius: 12,
     paddingVertical: 10,
     paddingHorizontal: 10,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-    backgroundColor: "rgba(0,0,0,0.18)",
+    borderColor: "rgba(0,0,0,0.10)",
+    backgroundColor: "#F6F7F9",
   },
-  branchPickText: { color: "white", fontWeight: "900" },
+  branchPickText: { color: "#043553", fontWeight: "600" },
 
   nodeActions: { flexDirection: "row", gap: 10, justifyContent: "flex-end" },
 
@@ -1285,24 +1803,207 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 52,
     borderRadius: 16,
-    backgroundColor: "rgba(241,238,219,0.95)",
+    backgroundColor: "#043553",
     alignItems: "center",
     justifyContent: "center",
   },
   btnDisabled: { opacity: 0.45 },
-  btnText: { color: "#043553", fontWeight: "900", fontSize: 15 },
+  btnText: { color: "#FFFFFF", fontWeight: "600", fontSize: 15 },
 
   btnGhost: {
-    backgroundColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    borderColor: "rgba(0,0,0,0.10)",
   },
-  btnTextGhost: { color: "white", fontWeight: "900", fontSize: 15 },
+  btnTextGhost: { color: "#043553", fontWeight: "600", fontSize: 15 },
 
-  // Modal
+  quickAddCard: {
+    borderRadius: 20,
+    padding: 16,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.10)",
+    gap: 10,
+  },
+  quickAddTitle: {
+    color: "#101828",
+    fontSize: 19,
+    fontWeight: "700",
+  },
+  segmented: {
+    flexDirection: "row",
+    padding: 4,
+    borderRadius: 14,
+    backgroundColor: "#F1F3F5",
+    gap: 4,
+  },
+  segmentBtn: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 10,
+  },
+  segmentBtnActive: {
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.09)",
+  },
+  segmentText: {
+    color: "rgba(16,24,40,0.62)",
+    fontWeight: "600",
+    fontSize: 13.5,
+  },
+  segmentTextActive: { color: "#043553" },
+  quickFactInput: {
+    minHeight: 82,
+    textAlignVertical: "top",
+  },
+  quickArticleInput: {
+    minHeight: 150,
+    textAlignVertical: "top",
+  },
+  quickActions: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  quickSaveBtn: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 14,
+    backgroundColor: "#043553",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 14,
+  },
+  quickSaveBtnText: {
+    color: "#FFFFFF",
+    fontWeight: "600",
+    fontSize: 15,
+  },
+  quickCancelBtn: {
+    minHeight: 48,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.10)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  quickCancelBtnText: { color: "#043553", fontWeight: "600" },
+  quickHint: {
+    color: "rgba(16,24,40,0.58)",
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  savedFactsHeader: {
+    marginTop: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  savedFactsTitle: {
+    color: "#101828",
+    fontWeight: "600",
+    fontSize: 14,
+  },
+  inlineLink: {
+    color: "#043553",
+    fontWeight: "600",
+    fontSize: 13,
+  },
+  emptyQuickText: {
+    color: "rgba(16,24,40,0.58)",
+    fontSize: 13,
+    paddingVertical: 6,
+  },
+  factList: { gap: 8 },
+  factRow: {
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "flex-start",
+    padding: 11,
+    borderRadius: 14,
+    backgroundColor: "#F9FAFB",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.08)",
+  },
+  factText: {
+    color: "#101828",
+    fontSize: 13.5,
+    lineHeight: 19,
+    fontWeight: "500",
+  },
+  factMeta: {
+    marginTop: 5,
+    color: "rgba(16,24,40,0.60)",
+    fontSize: 11.5,
+  },
+  factKeywords: {
+    marginTop: 3,
+    color: "rgba(16,24,40,0.52)",
+    fontSize: 11.5,
+  },
+  factRowActions: { gap: 6 },
+  miniActionBtn: {
+    minWidth: 58,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    borderRadius: 10,
+    backgroundColor: "rgba(4,53,83,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.09)",
+    alignItems: "center",
+  },
+  miniActionText: {
+    color: "#043553",
+    fontWeight: "600",
+    fontSize: 11.5,
+  },
+  miniDeleteBtn: {
+    backgroundColor: "rgba(185,28,28,0.05)",
+    borderColor: "rgba(185,28,28,0.13)",
+  },
+  miniDeleteText: {
+    color: "#B42318",
+    fontWeight: "600",
+    fontSize: 11.5,
+  },
+  advancedToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.10)",
+  },
+  advancedToggleOpen: {
+    borderColor: "rgba(4,53,83,0.22)",
+    backgroundColor: "rgba(4,53,83,0.04)",
+  },
+  advancedToggleTitle: {
+    color: "#101828",
+    fontWeight: "600",
+    fontSize: 14.5,
+  },
+  advancedToggleSub: {
+    marginTop: 3,
+    color: "rgba(16,24,40,0.58)",
+    fontSize: 12,
+  },
+  advancedToggleChevron: {
+    color: "#043553",
+    fontWeight: "700",
+    fontSize: 13,
+  },
+
   modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.60)",
+    backgroundColor: "rgba(7,16,24,0.48)",
     alignItems: "center",
     justifyContent: "center",
     padding: 16,
@@ -1312,23 +2013,28 @@ const styles = StyleSheet.create({
     maxWidth: 520,
     borderRadius: 18,
     padding: 14,
-    backgroundColor: "#0B0F14",
+    backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    borderColor: "rgba(0,0,0,0.10)",
   },
-  modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 10 },
-  modalTitle: { color: "white", fontWeight: "900", fontSize: 16 },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 10,
+  },
+  modalTitle: { color: "#101828", fontWeight: "600", fontSize: 16 },
   modalClose: {
     height: 34,
     paddingHorizontal: 12,
     borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,0.10)",
+    backgroundColor: "rgba(4,53,83,0.06)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    borderColor: "rgba(0,0,0,0.10)",
     alignItems: "center",
     justifyContent: "center",
   },
-  modalCloseText: { color: "white", fontWeight: "900" },
+  modalCloseText: { color: "#043553", fontWeight: "600" },
 
   modalRow: {
     flexDirection: "row",
@@ -1337,15 +2043,15 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-    backgroundColor: "rgba(255,255,255,0.06)",
+    borderColor: "rgba(0,0,0,0.10)",
+    backgroundColor: "#F9FAFB",
     marginTop: 10,
   },
   modalRowActive: {
-    borderColor: "rgba(241,238,219,0.28)",
-    backgroundColor: "rgba(241,238,219,0.12)",
+    borderColor: "rgba(4,53,83,0.24)",
+    backgroundColor: "rgba(4,53,83,0.08)",
   },
-  modalRowLabel: { color: "white", fontWeight: "900" },
-  modalRowSub: { color: "rgba(255,255,255,0.65)", fontWeight: "700", marginTop: 4 },
-  modalCheck: { color: "white", fontWeight: "900", fontSize: 18 },
+  modalRowLabel: { color: "#101828", fontWeight: "600" },
+  modalRowSub: { color: "rgba(16,24,40,0.62)", fontWeight: "400", marginTop: 4 },
+  modalCheck: { color: "#043553", fontWeight: "700", fontSize: 18 },
 });

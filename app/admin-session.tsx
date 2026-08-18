@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -7,12 +7,25 @@ import {
   FlatList,
   ActivityIndicator,
   Alert,
+  StatusBar,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 
 import { API_BASE_URL } from "../src/config";
 import { adminDeleteSession, getSavedAdminKey } from "../src/api";
+
+const BRAND = {
+  bg: "#F6F7F9",
+  surface: "#FFFFFF",
+  border: "rgba(0,0,0,0.10)",
+  text: "#101828",
+  muted: "rgba(16,24,40,0.70)",
+  faint: "rgba(16,24,40,0.48)",
+  navy: "#043553",
+  navySoft: "rgba(4,53,83,0.10)",
+  headerBg: "#FFFFFF",
+};
 
 type AiMsg = {
   role: "user" | "assistant";
@@ -30,7 +43,16 @@ type AiMeta = {
 type AiHistoryResponse = {
   session_id?: string;
   messages?: AiMsg[];
+  airstream_year?: number | null;
+  category?: string | null;
 } & AiMeta;
+
+function initials(label: string) {
+  const s = (label || "").trim();
+  if (!s) return "?";
+  const parts = s.split(/\s+/).slice(0, 2);
+  return parts.map((p) => p[0]?.toUpperCase()).join("");
+}
 
 function fmt(ts?: string) {
   if (!ts) return "";
@@ -54,6 +76,8 @@ export default function AdminSession() {
   const [error, setError] = useState("");
   const [messages, setMessages] = useState<AiMsg[]>([]);
   const [meta, setMeta] = useState<AiMeta>({});
+  const [airstreamYear, setAirstreamYear] = useState<number | null>(null);
+  const [category, setCategory] = useState("");
 
   const mounted = useRef(true);
 
@@ -71,6 +95,8 @@ export default function AdminSession() {
         const data = (await r.json()) as AiHistoryResponse;
 
         setMessages(Array.isArray(data?.messages) ? (data.messages as AiMsg[]) : []);
+        setAirstreamYear(typeof data?.airstream_year === "number" ? data.airstream_year : null);
+        setCategory(String(data?.category || "").trim());
         setMeta({
           active_article_id: data?.active_article_id ?? null,
           active_node_id: data?.active_node_id ?? null,
@@ -82,6 +108,8 @@ export default function AdminSession() {
         setError(String(e?.message ?? "Failed to load session."));
         setMeta({});
         setMessages([]);
+        setAirstreamYear(null);
+        setCategory("");
       } finally {
         setLoading(false);
       }
@@ -137,48 +165,100 @@ export default function AdminSession() {
     );
   }
 
+  const replayMessages = useMemo(() => {
+    const cleaned = messages.filter(
+      (m) =>
+        (m.role === "user" || m.role === "assistant") &&
+        String(m.text || "").trim().length > 0
+    );
+
+    // chat.tsx creates this opening bubble locally, so it usually is not stored.
+    if (cleaned[0]?.role === "user") {
+      return [
+        { role: "assistant" as const, text: "What’s going on with your Airstream?" },
+        ...cleaned,
+      ];
+    }
+
+    return cleaned;
+  }, [messages]);
+
   const pinned = !!meta.active_tree_present && !!meta.active_article_id && !!meta.active_node_id;
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
-      <View style={styles.header}>
-        <Text style={styles.title}>AI Session (QC)</Text>
-        <Text style={styles.sub}>Session: {sessionId ? `${sessionId.slice(0, 8)}…` : ""}</Text>
+      <StatusBar barStyle="dark-content" backgroundColor={BRAND.headerBg} />
 
-        <View style={styles.headerBtns}>
+      <View style={styles.header}>
+        <View style={styles.headerTopRow}>
           <Pressable
-            onPress={() => adminKey && sessionId && load(adminKey)}
-            style={({ pressed }) => [styles.smallBtn, pressed && { opacity: 0.92 }]}
+            onPress={() => router.back()}
+            hitSlop={12}
+            style={({ pressed }) => [
+              styles.backControl,
+              pressed && { opacity: 0.86, transform: [{ scale: 0.99 }] },
+            ]}
           >
-            <Text style={styles.smallBtnText}>Refresh</Text>
+            <Text style={styles.backIcon}>←</Text>
+            <Text style={styles.backText}>Back</Text>
           </Pressable>
-          <Pressable
-            onPress={confirmDelete}
-            style={({ pressed }) => [styles.smallBtn, styles.dangerBtn, pressed && { opacity: 0.92 }]}
-          >
-            <Text style={styles.smallBtnText}>Delete</Text>
-          </Pressable>
+
+          <View style={styles.headerTitleWrap}>
+            <Text style={styles.title}>Vinnie’s Brain</Text>
+            <Text style={styles.sub}>
+              {airstreamYear
+                ? `${airstreamYear} Airstream troubleshooting`
+                : "Saved troubleshooting conversation"}
+            </Text>
+          </View>
+
+          <View style={styles.headerActions}>
+            <Pressable
+              onPress={() => adminKey && sessionId && load(adminKey)}
+              style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.88 }]}
+            >
+              <Text style={styles.iconBtnText}>Refresh</Text>
+            </Pressable>
+            <Pressable
+              onPress={confirmDelete}
+              style={({ pressed }) => [
+                styles.iconBtn,
+                styles.dangerBtn,
+                pressed && { opacity: 0.88 },
+              ]}
+            >
+              <Text style={styles.dangerBtnText}>Delete</Text>
+            </Pressable>
+          </View>
         </View>
 
-        <View style={styles.metaRow}>
+        <View style={styles.qcBar}>
           <View style={[styles.pill, pinned ? styles.pillGreen : styles.pillGray]}>
-            <Text style={styles.pillText}>{pinned ? "Pinned flow: ON" : "Pinned flow: OFF"}</Text>
+            <Text style={styles.pillText}>{pinned ? "Pinned flow ON" : "Pinned flow OFF"}</Text>
           </View>
-          {!!meta.active_article_id && (
+
+          {!!category && (
             <View style={styles.pill}>
-              <Text style={styles.pillText}>Article: {shortId(meta.active_article_id)}</Text>
+              <Text style={styles.pillText}>{category}</Text>
             </View>
           )}
+
+          {!!meta.active_article_id && (
+            <View style={styles.pill}>
+              <Text style={styles.pillText}>Article {shortId(meta.active_article_id)}</Text>
+            </View>
+          )}
+
           {!!meta.active_node_id && (
             <View style={styles.pill}>
-              <Text style={styles.pillText}>Node: {shortId(meta.active_node_id)}</Text>
+              <Text style={styles.pillText}>Node {shortId(meta.active_node_id)}</Text>
             </View>
           )}
         </View>
 
         {!!meta.active_node_text && (
           <View style={styles.nodeBox}>
-            <Text style={styles.nodeLabel}>Current question</Text>
+            <Text style={styles.nodeLabel}>Current diagnostic question</Text>
             <Text style={styles.nodeText}>{meta.active_node_text}</Text>
           </View>
         )}
@@ -193,27 +273,48 @@ export default function AdminSession() {
       {loading ? (
         <View style={styles.loading}>
           <ActivityIndicator />
-          <Text style={styles.loadingText}>Loading…</Text>
+          <Text style={styles.loadingText}>Loading conversation…</Text>
         </View>
       ) : (
         <FlatList
-          data={messages}
-          keyExtractor={(_, idx) => String(idx)}
+          data={replayMessages}
+          keyExtractor={(item, idx) => `${idx}-${item.created_at || ""}`}
           contentContainerStyle={styles.list}
           renderItem={({ item }) => {
-            const mine = item.role === "user";
+            const isUser = item.role === "user";
+
             return (
-              <View style={[styles.bubble, mine ? styles.mine : styles.theirs]}>
-                <Text style={styles.role}>{mine ? "User" : "AI"}</Text>
-                <Text style={styles.msg}>{item.text}</Text>
-                {!!item.created_at && <Text style={styles.time}>{fmt(item.created_at)}</Text>}
+              <View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
+                {!isUser && (
+                  <View style={styles.avatar}>
+                    <Text style={styles.avatarText}>{initials("VB")}</Text>
+                  </View>
+                )}
+
+                <View
+                  style={[
+                    styles.bubble,
+                    isUser ? styles.userBubble : styles.aiBubble,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.bubbleText,
+                      isUser ? styles.userText : styles.aiText,
+                    ]}
+                  >
+                    {item.text}
+                  </Text>
+                </View>
               </View>
             );
           }}
           ListEmptyComponent={
             <View style={styles.empty}>
               <Text style={styles.emptyTitle}>No messages</Text>
-              <Text style={styles.emptySub}>This session doesn’t have any stored chat messages yet.</Text>
+              <Text style={styles.emptySub}>
+                This session doesn’t have any stored chat messages yet.
+              </Text>
             </View>
           }
         />
@@ -223,85 +324,236 @@ export default function AdminSession() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#0B0F14" },
+  safe: { flex: 1, backgroundColor: BRAND.bg },
 
-  header: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 10, gap: 8 },
-  title: { color: "white", fontSize: 18, fontWeight: "900" },
-  sub: { color: "rgba(255,255,255,0.65)", fontWeight: "700" },
-
-  headerBtns: { flexDirection: "row", gap: 10 },
-  smallBtn: {
-    height: 36,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,0.10)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+  header: {
+    backgroundColor: BRAND.headerBg,
+    borderBottomWidth: 1,
+    borderBottomColor: BRAND.border,
+    paddingHorizontal: 14,
+    paddingTop: 8,
+    paddingBottom: 10,
+    gap: 9,
+  },
+  headerTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  headerTitleWrap: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
   },
-  dangerBtn: {
-    backgroundColor: "rgba(239,68,68,0.16)",
-    borderColor: "rgba(239,68,68,0.28)",
+  title: {
+    color: BRAND.text,
+    fontSize: 17,
+    fontWeight: "700",
+    letterSpacing: 0.1,
   },
-  smallBtnText: { color: "white", fontWeight: "900", fontSize: 12 },
+  sub: {
+    marginTop: 1,
+    color: BRAND.muted,
+    fontWeight: "500",
+    fontSize: 11.5,
+    textAlign: "center",
+  },
 
-  metaRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  backControl: {
+    minWidth: 66,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingVertical: 8,
+  },
+  backIcon: {
+    color: BRAND.navy,
+    fontSize: 18,
+    lineHeight: 18,
+    marginTop: -1,
+  },
+  backText: {
+    color: BRAND.navy,
+    fontWeight: "600",
+    fontSize: 14,
+  },
+
+  headerActions: {
+    minWidth: 66,
+    alignItems: "flex-end",
+    gap: 5,
+  },
+  iconBtn: {
+    minWidth: 62,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 10,
+    backgroundColor: "rgba(4,53,83,0.06)",
+    borderWidth: 1,
+    borderColor: BRAND.border,
+    alignItems: "center",
+  },
+  iconBtnText: {
+    color: BRAND.navy,
+    fontWeight: "600",
+    fontSize: 11.5,
+  },
+  dangerBtn: {
+    backgroundColor: "rgba(185,28,28,0.06)",
+    borderColor: "rgba(185,28,28,0.16)",
+  },
+  dangerBtnText: {
+    color: "#B42318",
+    fontWeight: "600",
+    fontSize: 11.5,
+  },
+
+  qcBar: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: 6,
+  },
   pill: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
+    paddingVertical: 5,
+    paddingHorizontal: 9,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-    backgroundColor: "rgba(255,255,255,0.08)",
+    borderColor: BRAND.border,
+    backgroundColor: "rgba(0,0,0,0.025)",
   },
   pillGreen: {
-    backgroundColor: "rgba(34,197,94,0.15)",
-    borderColor: "rgba(34,197,94,0.25)",
+    backgroundColor: "rgba(22,163,74,0.08)",
+    borderColor: "rgba(22,163,74,0.18)",
   },
   pillGray: {
-    backgroundColor: "rgba(148,163,184,0.10)",
-    borderColor: "rgba(148,163,184,0.18)",
+    backgroundColor: "rgba(15,23,42,0.035)",
   },
-  pillText: { color: "rgba(255,255,255,0.92)", fontWeight: "900", fontSize: 12 },
+  pillText: {
+    color: BRAND.muted,
+    fontWeight: "500",
+    fontSize: 11.5,
+  },
 
   nodeBox: {
-    padding: 10,
+    padding: 9,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-    backgroundColor: "rgba(255,255,255,0.06)",
+    borderColor: BRAND.border,
+    backgroundColor: BRAND.bg,
   },
   nodeLabel: {
-    color: "rgba(255,255,255,0.70)",
-    fontWeight: "900",
-    fontSize: 12,
-    marginBottom: 6,
+    color: BRAND.muted,
+    fontWeight: "600",
+    fontSize: 11.5,
+    marginBottom: 4,
   },
-  nodeText: { color: "white", fontSize: 14, lineHeight: 19, fontWeight: "700" },
+  nodeText: {
+    color: BRAND.text,
+    fontSize: 13.5,
+    lineHeight: 18,
+    fontWeight: "400",
+  },
 
   errorBox: {
-    padding: 10,
-    borderRadius: 14,
+    padding: 9,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: "rgba(239,68,68,0.35)",
-    backgroundColor: "rgba(239,68,68,0.12)",
+    borderColor: "rgba(185,28,28,0.18)",
+    backgroundColor: "rgba(185,28,28,0.06)",
   },
-  errorText: { color: "white", fontWeight: "900" },
+  errorText: {
+    color: "#B42318",
+    fontWeight: "500",
+    fontSize: 13,
+  },
 
-  loading: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10 },
-  loadingText: { color: "rgba(255,255,255,0.75)", fontWeight: "800" },
+  loading: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+  },
+  loadingText: {
+    color: BRAND.muted,
+    fontWeight: "500",
+  },
 
-  list: { paddingHorizontal: 16, paddingBottom: 20, gap: 10 },
+  // These rows/bubbles intentionally match chat.tsx.
+  list: {
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 24,
+    flexGrow: 1,
+  },
+  row: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    marginBottom: 10,
+  },
+  rowLeft: { justifyContent: "flex-start" },
+  rowRight: { justifyContent: "flex-end" },
 
-  bubble: { padding: 12, borderRadius: 16, borderWidth: 1, gap: 6 },
-  mine: { backgroundColor: "rgba(37,99,235,0.25)", borderColor: "rgba(37,99,235,0.35)" },
-  theirs: { backgroundColor: "rgba(255,255,255,0.06)", borderColor: "rgba(255,255,255,0.10)" },
-  role: { color: "rgba(255,255,255,0.75)", fontWeight: "900", fontSize: 12 },
-  msg: { color: "white", fontSize: 14, lineHeight: 19 },
-  time: { color: "rgba(255,255,255,0.45)", fontWeight: "800", fontSize: 11 },
+  avatar: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "rgba(0,0,0,0.04)",
+    borderWidth: 1,
+    borderColor: BRAND.border,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 8,
+  },
+  avatarText: {
+    color: BRAND.text,
+    fontWeight: "600",
+  },
 
-  empty: { padding: 24, alignItems: "center", gap: 8 },
-  emptyTitle: { color: "white", fontWeight: "900", fontSize: 16 },
-  emptySub: { color: "rgba(255,255,255,0.65)", textAlign: "center" },
+  bubble: {
+    maxWidth: "86%",
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: BRAND.border,
+  },
+  userBubble: {
+    backgroundColor: BRAND.navySoft,
+  },
+  aiBubble: {
+    backgroundColor: BRAND.surface,
+  },
+  bubbleText: {
+    fontSize: 15.5,
+    lineHeight: 21,
+  },
+  userText: {
+    color: BRAND.text,
+    fontWeight: "400",
+  },
+  aiText: {
+    color: BRAND.text,
+    fontWeight: "400",
+    fontSize: 16.75,
+    lineHeight: 23,
+  },
+
+  empty: {
+    padding: 24,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    flex: 1,
+  },
+  emptyTitle: {
+    color: BRAND.text,
+    fontWeight: "600",
+    fontSize: 16,
+  },
+  emptySub: {
+    color: BRAND.muted,
+    textAlign: "center",
+    lineHeight: 19,
+  },
 });

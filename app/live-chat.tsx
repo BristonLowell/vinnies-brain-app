@@ -15,19 +15,24 @@ import {
   BackHandler,
   Image,
   Alert,
+  StatusBar,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
 import { getOrCreateSession, liveChatHistory, liveChatSend, liveChatOpened } from "../src/api";
 
 const BRAND = {
-  bg: "#071018",
-  surface: "rgba(255,255,255,0.06)",
-  border: "rgba(255,255,255,0.10)",
+  bg: "#F6F7F9",
+  surface: "#FFFFFF",
+  border: "rgba(0,0,0,0.10)",
   navy: "#043553",
+  navySoft: "rgba(4,53,83,0.10)",
   cream: "#F1EEDB",
-  text: "rgba(255,255,255,0.92)",
-  muted: "rgba(255,255,255,0.70)",
+  text: "#101828",
+  muted: "rgba(16,24,40,0.70)",
+  faint: "rgba(16,24,40,0.48)",
+  headerBg: "#FFFFFF",
+  danger: "#B42318",
 };
 
 type Msg = {
@@ -80,8 +85,8 @@ export default function LiveChat() {
   const lastSigRef = useRef<string>("");
 
   // ✅ only call /v1/livechat/opened once per screen mount
-const didOpenedRef = useRef(false);
-const sendInFlightRef = useRef(false);
+  const didOpenedRef = useRef(false);
+  const sendInFlightRef = useRef(false);
 
   useEffect(() => {
     if (Platform.OS !== "android") return;
@@ -278,6 +283,8 @@ const sendInFlightRef = useRef(false);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
+      <StatusBar barStyle="dark-content" backgroundColor={BRAND.headerBg} />
+
       <Stack.Screen
         options={{
           headerShown: false,
@@ -358,7 +365,7 @@ const sendInFlightRef = useRef(false);
               <RefreshControl
                 refreshing={refreshing}
                 onRefresh={() => sessionId && refresh(sessionId, true)}
-                tintColor="white"
+                tintColor={BRAND.navy}
               />
             }
             renderItem={({ item }) => {
@@ -414,7 +421,7 @@ const sendInFlightRef = useRef(false);
               value={text}
               onChangeText={setText}
               placeholder="Type a message…"
-              placeholderTextColor="rgba(255,255,255,0.45)"
+              placeholderTextColor={BRAND.muted}
               style={styles.input}
               multiline
               editable={ready && !loading && !sending}
@@ -437,35 +444,44 @@ const sendInFlightRef = useRef(false);
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: BRAND.bg },
 
-  headerBack: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.10)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.14)",
-  },
-  headerBackIcon: { fontSize: 18, lineHeight: 18, color: BRAND.cream, marginTop: -1 },
-  headerBackText: { color: BRAND.cream, fontWeight: "900", letterSpacing: 0.2, fontSize: 14 },
-
   header: {
     paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 8,
+    paddingTop: 8,
+    paddingBottom: 10,
     flexDirection: "row",
     gap: 10,
     alignItems: "center",
+    backgroundColor: BRAND.headerBg,
+    borderBottomWidth: 1,
+    borderBottomColor: BRAND.border,
   },
-  title: { color: BRAND.cream, fontSize: 18, fontWeight: "900" },
-  sub: { marginTop: 2, color: BRAND.muted },
-  meta: { marginTop: 6, color: "rgba(255,255,255,0.45)", fontSize: 12, fontWeight: "700" },
+  headerBack: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 4,
+    paddingVertical: 8,
+    backgroundColor: "transparent",
+  },
+  headerBackIcon: {
+    fontSize: 18,
+    lineHeight: 18,
+    color: BRAND.navy,
+    marginTop: -1,
+  },
+  headerBackText: {
+    color: BRAND.navy,
+    fontWeight: "600",
+    letterSpacing: 0.2,
+    fontSize: 14,
+  },
+  title: { color: BRAND.text, fontSize: 17, fontWeight: "700" },
+  sub: { marginTop: 2, color: BRAND.muted, fontSize: 12.5, fontWeight: "500" },
+  meta: { marginTop: 4, color: BRAND.faint, fontSize: 11, fontWeight: "500" },
 
   hdrBtn: {
-    height: 40,
-    paddingHorizontal: 12,
+    minHeight: 38,
+    paddingHorizontal: 11,
     borderRadius: 12,
     backgroundColor: BRAND.surface,
     borderWidth: 1,
@@ -473,64 +489,73 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  hdrBtnText: { color: "white", fontWeight: "900", fontSize: 12 },
+  hdrBtnText: { color: BRAND.navy, fontWeight: "600", fontSize: 12 },
 
   errorBox: {
     marginHorizontal: 14,
-    marginBottom: 6,
+    marginTop: 10,
+    marginBottom: 2,
     padding: 12,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "rgba(241,238,219,0.20)",
-    backgroundColor: "rgba(241,238,219,0.08)",
+    borderColor: "rgba(180,35,24,0.18)",
+    backgroundColor: "rgba(180,35,24,0.06)",
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
   },
-  errorText: { color: BRAND.cream, fontWeight: "900", flex: 1 },
+  errorText: { color: BRAND.danger, fontWeight: "500", flex: 1, lineHeight: 19 },
   retryBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 12,
-    backgroundColor: BRAND.cream,
+    paddingHorizontal: 13,
+    paddingVertical: 8,
+    borderRadius: 11,
+    backgroundColor: BRAND.surface,
+    borderWidth: 1,
+    borderColor: "rgba(180,35,24,0.18)",
   },
-  retryBtnText: { color: BRAND.navy, fontWeight: "900" },
+  retryBtnText: { color: BRAND.danger, fontWeight: "600" },
 
-  list: { paddingHorizontal: 14, paddingVertical: 10, gap: 10, flexGrow: 1 },
-
-  bubble: { maxWidth: "82%", padding: 12, borderRadius: 16, borderWidth: 1 },
-
-  mine: { alignSelf: "flex-end", backgroundColor: BRAND.navy, borderColor: "rgba(241,238,219,0.18)" },
-  theirs: { alignSelf: "flex-start", backgroundColor: "rgba(255,255,255,0.05)", borderColor: BRAND.border },
-
+  list: { paddingHorizontal: 14, paddingVertical: 12, gap: 10, flexGrow: 1 },
+  bubble: {
+    maxWidth: "84%",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  mine: {
+    alignSelf: "flex-end",
+    backgroundColor: BRAND.navySoft,
+    borderColor: "rgba(4,53,83,0.18)",
+  },
+  theirs: {
+    alignSelf: "flex-start",
+    backgroundColor: BRAND.surface,
+    borderColor: BRAND.border,
+  },
   system: {
     alignSelf: "center",
     maxWidth: "92%",
-    backgroundColor: "rgba(241,238,219,0.10)",
-    borderColor: "rgba(241,238,219,0.22)",
+    backgroundColor: "rgba(4,53,83,0.06)",
+    borderColor: "rgba(4,53,83,0.14)",
   },
-  systemText: { color: "rgba(241,238,219,0.95)", fontWeight: "900", textAlign: "center" },
-
-  msgText: { color: BRAND.text, fontSize: 15, lineHeight: 20 },
+  systemText: { color: BRAND.navy, fontWeight: "500", textAlign: "center" },
+  msgText: { color: BRAND.text, fontSize: 15.5, lineHeight: 21, fontWeight: "400" },
   msgImage: {
     width: 220,
     height: 220,
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: "rgba(0,0,0,0.04)",
   },
 
   inputWrap: {
-    padding: 12,
+    paddingHorizontal: 14,
+    paddingTop: 10,
     borderTopWidth: 1,
     borderTopColor: BRAND.border,
     backgroundColor: BRAND.bg,
   },
-  inputRow: {
-    flexDirection: "row",
-    gap: 10,
-    alignItems: "flex-end",
-  },
-
+  inputRow: { flexDirection: "row", gap: 10, alignItems: "flex-end" },
   attachBtn: {
     height: 44,
     width: 44,
@@ -541,11 +566,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  attachBtnText: { color: "white", fontWeight: "900", fontSize: 18, marginTop: -1 },
-
+  attachBtnText: { color: BRAND.navy, fontWeight: "500", fontSize: 22, marginTop: -2 },
   input: {
     flex: 1,
-    color: "white",
+    color: BRAND.text,
     minHeight: 44,
     maxHeight: 130,
     fontSize: 15,
@@ -556,17 +580,18 @@ const styles = StyleSheet.create({
     backgroundColor: BRAND.surface,
     borderWidth: 1,
     borderColor: BRAND.border,
+    fontWeight: "400",
   },
   btn: {
     height: 44,
     paddingHorizontal: 16,
     borderRadius: 14,
-    backgroundColor: BRAND.cream,
+    backgroundColor: BRAND.navy,
     alignItems: "center",
     justifyContent: "center",
   },
-  btnDisabled: { opacity: 0.4 },
-  btnText: { color: BRAND.navy, fontWeight: "900" },
+  btnDisabled: { opacity: 0.42 },
+  btnText: { color: "#FFFFFF", fontWeight: "600" },
 
   photoPreviewRow: {
     flexDirection: "row",
@@ -578,30 +603,36 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: "rgba(0,0,0,0.04)",
+    borderWidth: 1,
+    borderColor: BRAND.border,
   },
   removePhotoBtn: {
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 9,
     borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,0.10)",
+    backgroundColor: BRAND.surface,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.14)",
+    borderColor: BRAND.border,
   },
-  removePhotoText: { color: BRAND.cream, fontWeight: "900" },
+  removePhotoText: { color: BRAND.navy, fontWeight: "600" },
 
-  empty: { padding: 24, alignItems: "center", gap: 8 },
-  emptyTitle: { color: "white", fontWeight: "900", fontSize: 16 },
-  emptySub: { color: "rgba(255,255,255,0.65)", textAlign: "center" },
+  empty: { padding: 28, alignItems: "center", gap: 8 },
+  emptyTitle: { color: BRAND.text, fontWeight: "600", fontSize: 16 },
+  emptySub: { color: BRAND.muted, textAlign: "center", lineHeight: 19 },
 
-  skelWrap: { paddingHorizontal: 14, paddingTop: 10, gap: 10, flex: 1 },
+  skelWrap: { paddingHorizontal: 14, paddingTop: 12, gap: 10, flex: 1 },
   skelBubble: { maxWidth: "82%", padding: 12, borderRadius: 16, borderWidth: 1 },
-  skelMine: { alignSelf: "flex-end", backgroundColor: "rgba(4,53,83,0.22)", borderColor: "rgba(241,238,219,0.12)" },
-  skelTheirs: { alignSelf: "flex-start", backgroundColor: "rgba(255,255,255,0.05)", borderColor: BRAND.border },
+  skelMine: {
+    alignSelf: "flex-end",
+    backgroundColor: BRAND.navySoft,
+    borderColor: "rgba(4,53,83,0.14)",
+  },
+  skelTheirs: { alignSelf: "flex-start", backgroundColor: BRAND.surface, borderColor: BRAND.border },
   skelLine: {
     height: 10,
     borderRadius: 8,
-    backgroundColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(16,24,40,0.10)",
     width: "92%",
   },
 });

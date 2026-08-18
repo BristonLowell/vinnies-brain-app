@@ -57,7 +57,6 @@ type ChatItem = {
     clarifyingQuestion?: string;
     checkpointSummary?: CheckpointSummary;
     troubleshootingTurn?: boolean;
-    answerChoices?: string[];
   };
 };
 
@@ -81,7 +80,6 @@ const RESET_AFTER_MS = 10 * 60 * 1000;
 const AI_CONSENT_KEY = "vinniesbrain_ai_consent_v1"; // "allow" | "deny"
 // IMPORTANT: set this to your real AI provider name
 const AI_PROVIDER_NAME = "OpenAI";
-const UNSURE_ANSWER_CHOICE = "I’m not sure";
 
 function initials(label: string) {
   const s = (label || "").trim();
@@ -129,39 +127,6 @@ function getAssistantResponseText(res: any): string {
   return "";
 }
 
-function getAnswerChoices(res: any): string[] {
-  const raw = res?.answer_choices ?? res?.data?.answer_choices;
-  if (!Array.isArray(raw)) return [];
-
-  const cleaned: string[] = [];
-  const seen = new Set<string>();
-
-  for (const value of raw) {
-    const choice = cleanResponseText(value).replace(/\s+/g, " ");
-    if (!choice) continue;
-
-    const normalized = choice.toLowerCase().replace(/’/g, "'");
-    if (
-      normalized === "i'm not sure" ||
-      normalized === "im not sure" ||
-      normalized === "not sure"
-    ) {
-      continue;
-    }
-
-    const key = normalized;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    cleaned.push(choice);
-
-    if (cleaned.length >= 3) break;
-  }
-
-  // Only replace typing with buttons when the backend supplied at least two
-  // useful answers. The app always adds the uncertainty option itself.
-  return cleaned.length >= 2 ? [...cleaned, UNSURE_ANSWER_CHOICE] : [];
-}
-
 export default function Chat() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -191,9 +156,6 @@ export default function Chat() {
 
   // ✅ “Resolved?” prompt state
   const [showResolvedPrompt, setShowResolvedPrompt] = useState(false);
-
-  // Users can leave the quick replies and type a custom answer when needed.
-  const [showCustomAnswerInput, setShowCustomAnswerInput] = useState(false);
 
   const ITEMS_KEY = useMemo(
     () => (sessionId ? `vinniesbrain_chat_items_${sessionId}` : ""),
@@ -390,7 +352,6 @@ export default function Chat() {
             setSending(false);
             setText("");
             setShowResolvedPrompt(false);
-            setShowCustomAnswerInput(false);
 
             router.replace("/");
           }
@@ -428,7 +389,6 @@ export default function Chat() {
           setItems([INITIAL_ASSISTANT]);
           setShowEscalate(false);
           setShowResolvedPrompt(false);
-          setShowCustomAnswerInput(false);
           return;
         }
 
@@ -440,7 +400,6 @@ export default function Chat() {
               setItems(parsed);
               const last = [...parsed].reverse().find((x) => x.role === "assistant");
               setShowEscalate(!!last?.meta?.showEscalation);
-              setShowCustomAnswerInput(false);
               return;
             }
           }
@@ -448,11 +407,9 @@ export default function Chat() {
 
         setItems([INITIAL_ASSISTANT]);
         setShowEscalate(false);
-        setShowCustomAnswerInput(false);
       } catch {
         setItems([INITIAL_ASSISTANT]);
         setShowEscalate(false);
-        setShowCustomAnswerInput(false);
       }
     })();
 
@@ -473,18 +430,6 @@ export default function Chat() {
   // ✅ Lock chat unless consent is allowed
   const aiAllowed = aiConsent === "allow";
   const canSend = useMemo(() => aiAllowed && !sending && text.trim().length > 0, [aiAllowed, sending, text]);
-
-  const activeAnswerChoices = useMemo(() => {
-    const last = items[items.length - 1];
-    if (!last || last.role !== "assistant") return [];
-    return Array.isArray(last.meta?.answerChoices) ? last.meta.answerChoices : [];
-  }, [items]);
-
-  const hasActiveAnswerChoices = activeAnswerChoices.length > 0;
-  const showQuickReplies =
-    aiAllowed && hasActiveAnswerChoices && !showCustomAnswerInput && !showResolvedPrompt;
-  const showChatInput =
-    !showResolvedPrompt && (!hasActiveAnswerChoices || showCustomAnswerInput);
 
   // Count only actual troubleshooting/advice responses for escalation.
   // Intake questions, the opening greeting, and server-error messages do not count.
@@ -533,8 +478,6 @@ export default function Chat() {
     const isTroubleshootingTurn =
       typeof troubleshootingFlag === "boolean" ? troubleshootingFlag : se;
 
-    const answerChoices = isTroubleshootingTurn ? [] : getAnswerChoices(response);
-
     setItems((prev) => [
       ...prev,
       {
@@ -546,7 +489,6 @@ export default function Chat() {
           clarifyingQuestion,
           checkpointSummary,
           troubleshootingTurn: isTroubleshootingTurn,
-          answerChoices,
         },
       },
     ]);
@@ -557,17 +499,15 @@ export default function Chat() {
     // Intake questions, question-only follow-ups, greetings, and server errors should not show it.
     Keyboard.dismiss();
     inputRef.current?.blur();
-    setShowCustomAnswerInput(false);
     setShowResolvedPrompt(isTroubleshootingTurn);
   }
 
-  async function submitMessage(rawMessage: string) {
-    const msg = rawMessage.trim();
+  async function onSend() {
+    const msg = text.trim();
     if (!msg || sending) return;
 
-    // Hide any response controls once the user continues.
+    // ✅ Hide resolved prompt once user continues
     setShowResolvedPrompt(false);
-    setShowCustomAnswerInput(false);
 
     // ✅ Ensure consent before transmitting any user content to AI
     if (!aiAllowed) {
@@ -616,14 +556,6 @@ export default function Chat() {
       setSending(false);
       scrollToBottom(true);
     }
-  }
-
-  async function onSend() {
-    await submitMessage(text);
-  }
-
-  async function onAnswerChoice(choice: string) {
-    await submitMessage(choice);
   }
 
   function confirmEscalation(mode: "livechat" | "email") {
@@ -718,7 +650,7 @@ export default function Chat() {
                 styles.listContent.paddingBottom +
                 16 +
                 safeBottom +
-                (showResolvedPrompt || showQuickReplies ? 24 : INPUT_BAR_EST_HEIGHT + 16),
+                (showResolvedPrompt ? 24 : INPUT_BAR_EST_HEIGHT + 16),
             },
           ]}
           keyboardShouldPersistTaps="always"
@@ -785,39 +717,6 @@ export default function Chat() {
                       <Text style={styles.resolvedBtnText}>Yes</Text>
                     </Pressable>
                   </View>
-                </View>
-              </View>
-            ) : showQuickReplies ? (
-              <View style={[styles.row, styles.rowLeft, styles.quickReplyChatRow]}>
-                <View style={styles.avatarSpacer} />
-                <View style={styles.quickReplyWrap}>
-                  {activeAnswerChoices.map((choice) => (
-                    <Pressable
-                      key={choice}
-                      onPress={() => onAnswerChoice(choice)}
-                      disabled={sending}
-                      style={({ pressed }) => [
-                        styles.quickReplyBtn,
-                        choice === UNSURE_ANSWER_CHOICE && styles.quickReplyUnsure,
-                        pressed && { opacity: 0.9, transform: [{ scale: 0.99 }] },
-                      ]}
-                    >
-                      <Text style={styles.quickReplyText}>{choice}</Text>
-                    </Pressable>
-                  ))}
-
-                  <Pressable
-                    onPress={() => {
-                      Keyboard.dismiss();
-                      setShowCustomAnswerInput(true);
-                    }}
-                    style={({ pressed }) => [
-                      styles.customAnswerBtn,
-                      pressed && { opacity: 0.75 },
-                    ]}
-                  >
-                    <Text style={styles.customAnswerText}>Type a different answer</Text>
-                  </Pressable>
                 </View>
               </View>
             ) : null
@@ -915,7 +814,7 @@ export default function Chat() {
         )}
 
         {/* ✅ Chat input (hide it while the resolved prompt is showing in the chat list) */}
-        {showChatInput && (
+        {!showResolvedPrompt && (
           <View
             style={[
               styles.inputWrap,
@@ -1145,47 +1044,6 @@ const styles = StyleSheet.create({
     color: BRAND.lightText,
     fontWeight: "600", // ✅ not bold
     fontSize: 15,
-  },
-
-  quickReplyChatRow: {
-    marginTop: 0,
-    marginBottom: 10,
-  },
-  quickReplyWrap: {
-    maxWidth: "86%",
-    flex: 1,
-    gap: 8,
-  },
-  quickReplyBtn: {
-    minHeight: 46,
-    justifyContent: "center",
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    borderRadius: 15,
-    backgroundColor: "rgba(4,53,83,0.10)",
-    borderWidth: 1,
-    borderColor: "rgba(4,53,83,0.20)",
-  },
-  quickReplyUnsure: {
-    backgroundColor: "rgba(0,0,0,0.03)",
-    borderColor: "rgba(0,0,0,0.12)",
-  },
-  quickReplyText: {
-    color: BRAND.lightText,
-    fontSize: 15.5,
-    lineHeight: 20,
-    fontWeight: "500",
-    textAlign: "center",
-  },
-  customAnswerBtn: {
-    alignSelf: "center",
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-  },
-  customAnswerText: {
-    color: BRAND.navy,
-    fontSize: 14,
-    fontWeight: "600",
   },
 
   inputWrap: { paddingHorizontal: 14 },

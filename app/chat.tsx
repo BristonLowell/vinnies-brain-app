@@ -171,7 +171,9 @@ function renderAssistantBody(text: string, isTroubleshooting?: boolean) {
   for (const line of lines) {
     const cleaned = line
       .replace(/^[-•*]\s*/, "")
-      .replace(/^\d+[.)]\s*/, "")
+      // Only strip a numeric list marker when it is followed by whitespace.
+      // This prevents values like "12.7V" from becoming "7V".
+      .replace(/^\d+[.)]\s+/, "")
       .trim();
 
     if (!cleaned) continue;
@@ -793,13 +795,31 @@ export default function Chat() {
                     </View>
                   )}
 
-                  <View style={styles.messageColumn}>
-                    <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
-                      {!isUser && !!cq && <Text style={styles.clarifyingQuestion}>{cq}</Text>}
+                  <View
+                    style={[
+                      styles.messageColumn,
+                      !isUser && item.meta?.troubleshootingTurn && styles.troubleshootingColumn,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.bubble,
+                        isUser ? styles.userBubble : styles.aiBubble,
+                        !isUser && item.meta?.troubleshootingTurn && styles.troubleshootingBubble,
+                      ]}
+                    >
+                      {!isUser && !!cq && !item.meta?.troubleshootingTurn && (
+                        <Text style={styles.clarifyingQuestion}>{cq}</Text>
+                      )}
                       {isUser ? (
                         <Text style={[styles.bubbleText, styles.userText]}>{body}</Text>
                       ) : (
                         renderAssistantBody(body, item.meta?.troubleshootingTurn)
+                      )}
+                      {!isUser && !!cq && item.meta?.troubleshootingTurn && (
+                        <Text style={[styles.clarifyingQuestion, styles.troubleshootingResultQuestion]}>
+                          {cq}
+                        </Text>
                       )}
                       {!isUser && renderCheckpointSummary(item.meta?.checkpointSummary)}
                     </View>
@@ -817,12 +837,7 @@ export default function Chat() {
                           style={({ pressed }) => [
                             styles.quickReplyBtn,
                             (sending || !aiAllowed) && styles.quickReplyBtnDisabled,
-                            pressed &&
-                              !sending &&
-                              aiAllowed && {
-                                opacity: 0.9,
-                                transform: [{ scale: 0.99 }],
-                              },
+                            pressed && !sending && aiAllowed && styles.quickReplyBtnPressed,
                           ]}
                         >
                           <Text style={styles.quickReplyText}>{choice}</Text>
@@ -1079,6 +1094,14 @@ const styles = StyleSheet.create({
     maxWidth: "86%",
     flexShrink: 1,
   },
+  troubleshootingColumn: {
+    width: "86%",
+    maxWidth: "86%",
+    flexShrink: 0,
+  },
+  troubleshootingBubble: {
+    width: "100%",
+  },
 
   quickReplyUserRow: {
     flexDirection: "row",
@@ -1095,20 +1118,34 @@ const styles = StyleSheet.create({
     maxWidth: "88%",
   },
   quickReplyBtn: {
-    backgroundColor: "rgba(4,53,83,0.10)",
-    borderWidth: 1,
-    borderColor: "rgba(4,53,83,0.22)",
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 2,
+    borderColor: BRAND.navy,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    minHeight: 44,
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#000000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  quickReplyBtnPressed: {
+    backgroundColor: BRAND.navySoft,
+    opacity: 0.82,
+    transform: [{ scale: 0.98 }],
   },
   quickReplyBtnDisabled: {
     opacity: 0.55,
   },
   quickReplyText: {
     color: BRAND.navy,
-    fontSize: 14.5,
-    fontWeight: "600",
+    fontSize: 15,
+    fontWeight: "700",
+    letterSpacing: 0.1,
   },
 
   avatar: {
@@ -1147,6 +1184,10 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     marginBottom: 6,
   },
+  troubleshootingResultQuestion: {
+    marginTop: 12,
+    marginBottom: 0,
+  },
 
   stepsWrap: {
     gap: 10,
@@ -1180,6 +1221,8 @@ const styles = StyleSheet.create({
   },
   stepText: {
     flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
     color: BRAND.lightText,
     fontSize: 16.25,
     lineHeight: 22.5,

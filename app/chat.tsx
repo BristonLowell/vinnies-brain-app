@@ -834,10 +834,6 @@ export default function Chat() {
               </View>
             );
           }}
-          ItemSeparatorComponent={undefined}
-          ListHeaderComponent={null}
-            );
-          }}
           ListFooterComponent={
             sending ? (
               <View style={[styles.row, styles.rowLeft, { marginTop: 2 }]}>
